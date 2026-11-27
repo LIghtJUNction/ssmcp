@@ -17,6 +17,7 @@ const ADDRESS_ENV: &str = "SSMCP_WORKER_WINDOW_ADDRESS";
 const TOKEN_ENV: &str = "SSMCP_WORKER_WINDOW_TOKEN";
 const START_TIMEOUT: Duration = Duration::from_secs(30);
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const RETIREMENT_CONFIRMATION_TTL: Duration = Duration::from_secs(30);
 // Keep the task overview bounded separately from complete manager conditions.
 const MAX_STATUS_BYTES: usize = 4096;
 const MAX_STATUS_FRAME_BYTES: usize = 64 * 1024;
@@ -127,11 +128,21 @@ struct LinkedSnapshot {
 struct ParentState {
     closed: AtomicBool,
     reload_requested: AtomicBool,
+    monitor_delta: Mutex<Option<MonitorDelta>>,
     snapshot: Mutex<Option<(LinkedSnapshot, Instant)>>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MonitorDelta {
+    client_id: String,
+    generation: String,
+    delta: i32,
 }
 
 enum ChildUpdate {
     Snapshot(Box<LinkedSnapshot>),
+    Delta(MonitorDelta),
     Reload,
 }
 
@@ -146,6 +157,14 @@ impl ParentState {
                     .snapshot
                     .lock()
                     .unwrap_or_else(|error| error.into_inner()) = Some((*snapshot, Instant::now()));
+                true
+            }
+            ChildUpdate::Delta(command) => {
+                let mut pending = self.monitor_delta.lock().unwrap_or_else(|e| e.into_inner());
+                if pending.is_some() {
+                    return false;
+                }
+                *pending = Some(command);
                 true
             }
             ChildUpdate::Reload => {
@@ -311,7 +330,7 @@ fn format_overview(snapshot: &LinkedSnapshot) -> String {
             snapshot.activity.omitted
         );
     }
-    text.push_str("\n/worker +N adds stations\n/worker -N retires stations after acknowledgement");
+    text.push_str("\n/worker +N adds stations\n/worker -N retires stations after acknowledgement\n/worker retire #NN previews one station for local confirmation");
     text
 }
 
@@ -364,6 +383,7 @@ pub(super) fn launch(
         state: Arc::new(ParentState {
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
+            monitor_delta: Mutex::new(None),
             snapshot: Mutex::new(None),
         }),
         watcher: None,
@@ -463,6 +483,34 @@ impl WindowChild {
         self.state.take_reload_request()
     }
 
+    pub(super) fn take_monitor_delta(&self, state: &serde_json::Value) -> Option<Result<i32, ()>> {
+        let command = self
+            .state
+            .monitor_delta
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()?;
+        let same = state["client_id"].as_str() == Some(command.client_id.as_str())
+            && state["generation"].as_str() == Some(command.generation.as_str())
+            && state["closed"] != true
+            && state["stopping"] != true
+            && !self.is_closed();
+        Some(if same { Ok(command.delta) } else { Err(()) })
+    }
+
+    pub(super) fn reply_monitor_delta(&self, target: Result<usize, ()>) -> Result<(), String> {
+        let _writer = self.command_lock.lock().unwrap_or_else(|e| e.into_inner());
+        let mut stream = self
+            .control
+            .as_ref()
+            .ok_or("The worker monitor is disconnected.")?;
+        let value = target
+            .ok()
+            .and_then(|n| u8::try_from(n).ok())
+            .unwrap_or(255);
+        stream.write_all(&[b'K', value]).map_err(|e| e.to_string())
+    }
+
     pub(super) fn is_closed(&self) -> bool {
         self.state.closed.load(Ordering::Acquire)
             || self
@@ -473,9 +521,18 @@ impl WindowChild {
 
     /// Send an absolute desired size; a later snapshot reports actual core state.
     pub(super) fn request_resize(&self, total: usize) -> Result<u64, String> {
-        if total > 128 {
-            return Err("worker total must be between 0 and 128".into());
-        }
+        self.send_change(total, ResizeAction::Resize)
+    }
+
+    pub(super) fn prepare_retirement(&self, slot: usize) -> Result<u64, String> {
+        self.send_change(slot, ResizeAction::Prepare)
+    }
+
+    pub(super) fn confirm_retirement(&self, slot: usize, prior: u64) -> Result<u64, String> {
+        self.send_change(slot, ResizeAction::Confirm(prior))
+    }
+
+    fn send_change(&self, target: usize, action: ResizeAction) -> Result<u64, String> {
         let mut sequence = self
             .command_lock
             .lock()
@@ -486,7 +543,12 @@ impl WindowChild {
         let request_id = (*sequence)
             .checked_add(1)
             .ok_or("worker resize request counter is exhausted")?;
-        let command = resize_command(request_id, total)?;
+        let command = ResizeRequest {
+            request_id,
+            target,
+            action,
+        }
+        .encode()?;
         *sequence = request_id;
         let mut stream = self
             .control
@@ -521,21 +583,63 @@ impl WindowChild {
     }
 }
 
-fn resize_command(request_id: u64, total: usize) -> Result<[u8; 11], String> {
-    if total > 128 || request_id == 0 {
-        return Err("worker total must be between 0 and 128 with a nonzero request ID".into());
-    }
-    let mut command = [0; 11];
-    command[0] = b'N';
-    command[1..3].copy_from_slice(&(total as u16).to_be_bytes());
-    command[3..].copy_from_slice(&request_id.to_be_bytes());
-    Ok(command)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResizeAction {
+    Resize,
+    Prepare,
+    Confirm(u64),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ResizeRequest {
     request_id: u64,
+    // A total for Resize, a zero-based station for Prepare and Confirm.
     target: usize,
+    action: ResizeAction,
+}
+
+impl ResizeRequest {
+    fn validate(self) -> Result<(), String> {
+        let valid_target = match self.action {
+            ResizeAction::Resize => self.target <= 128,
+            ResizeAction::Prepare | ResizeAction::Confirm(_) => self.target < 128,
+        };
+        if !valid_target || self.request_id == 0 {
+            return Err("invalid worker station, total, or request ID".into());
+        }
+        if let ResizeAction::Confirm(prior) = self.action
+            && (prior == 0 || prior >= self.request_id)
+        {
+            return Err("invalid worker retirement preview ID".into());
+        }
+        Ok(())
+    }
+
+    fn encode(self) -> Result<Vec<u8>, String> {
+        self.validate()?;
+        let mut frame = Vec::with_capacity(19);
+        frame.push(match self.action {
+            ResizeAction::Resize => b'N',
+            ResizeAction::Prepare => b'T',
+            ResizeAction::Confirm(_) => b'Y',
+        });
+        frame.extend_from_slice(&(self.target as u16).to_be_bytes());
+        frame.extend_from_slice(&self.request_id.to_be_bytes());
+        if let ResizeAction::Confirm(prior) = self.action {
+            frame.extend_from_slice(&prior.to_be_bytes());
+        }
+        Ok(frame)
+    }
+}
+
+#[cfg(test)]
+fn resize_command(request_id: u64, total: usize) -> Result<Vec<u8>, String> {
+    ResizeRequest {
+        request_id,
+        target: total,
+        action: ResizeAction::Resize,
+    }
+    .encode()
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -545,59 +649,174 @@ struct ResizeReceipt {
     target: usize,
     accepted: bool,
     error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    confirm_slot: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
 }
 
-#[derive(Default)]
-struct ResizeState {
+// The core capability never leaves the child. The parent can refer only to the
+// original preview on this authenticated, ordered control connection.
+struct RetirementPreview<T> {
+    request_id: u64,
+    slot: usize,
+    prepared: Instant,
+    ticket: T,
+}
+
+struct ResizeState<T = crate::worker::Retirement> {
+    highest_id: u64,
     pending: Option<ResizeRequest>,
-    active: Option<ResizeRequest>,
+    preview: Option<RetirementPreview<T>>,
     receipt: Option<ResizeReceipt>,
+}
+
+impl<T> Default for ResizeState<T> {
+    fn default() -> Self {
+        Self {
+            highest_id: 0,
+            pending: None,
+            preview: None,
+            receipt: None,
+        }
+    }
+}
+
+impl<T> ResizeState<T> {
+    fn enqueue(&mut self, request: ResizeRequest) {
+        if request.request_id <= self.highest_id {
+            return;
+        }
+        self.highest_id = request.request_id;
+        // Invalidate immediately, even if another command replaces this one
+        // before the runtime next polls the child channel.
+        if !self.preview.as_ref().is_some_and(|preview| {
+            request.action == ResizeAction::Confirm(preview.request_id)
+                && request.target == preview.slot
+        }) {
+            self.preview = None;
+        }
+        self.pending = Some(request);
+    }
+
+    fn invalidate(&mut self) {
+        self.preview = None;
+        self.pending = None;
+        self.receipt = None;
+    }
+
+    fn apply(
+        &mut self,
+        now: Instant,
+        resize: impl FnOnce(usize) -> Result<(), String>,
+        prepare: impl FnOnce(usize) -> Result<(T, Option<String>), String>,
+        force: impl FnOnce(&T) -> Result<(), String>,
+    ) -> Option<Result<(), String>> {
+        let request = self.pending.take()?;
+        let preview = self.preview.take();
+        let mut confirm_slot = None;
+        let mut task_id = None;
+        let result = match request.action {
+            ResizeAction::Resize => resize(request.target),
+            ResizeAction::Prepare => prepare(request.target).map(|(ticket, current_task)| {
+                self.preview = Some(RetirementPreview {
+                    request_id: request.request_id,
+                    slot: request.target,
+                    prepared: now,
+                    ticket,
+                });
+                confirm_slot = Some(request.target + 1);
+                task_id = current_task;
+            }),
+            ResizeAction::Confirm(prior) => match preview {
+                Some(p)
+                    if p.request_id == prior
+                        && p.slot == request.target
+                        && now.duration_since(p.prepared) < RETIREMENT_CONFIRMATION_TTL =>
+                {
+                    // The core rechecks the private ticket against the current
+                    // pool, occupant and claim while holding its queue lock.
+                    force(&p.ticket)
+                }
+                _ => Err(
+                    "Worker retirement preview changed or expired. Preview the station again."
+                        .into(),
+                ),
+            },
+        };
+        self.receipt = Some(ResizeReceipt {
+            request_id: request.request_id,
+            target: if request.action == ResizeAction::Resize {
+                request.target
+            } else {
+                request.target + 1
+            },
+            accepted: result.is_ok(),
+            error: result.as_ref().err().map(|e| bounded_resize_error(e)),
+            confirm_slot,
+            task_id,
+        });
+        Some(result)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum ControlCommand {
     Stop,
     Resize(ResizeRequest),
+    MonitorReply(u8),
 }
 
 /// A fixed-size decoder preserves fragmented commands across read timeouts.
+/// N retains its original eleven-byte frame; only Y carries a preview ID.
 #[derive(Default)]
 struct ControlDecoder {
-    payload: [u8; 10],
+    payload: [u8; 18],
     received: usize,
-    reading: bool,
+    opcode: u8,
 }
 
 impl ControlDecoder {
     fn push(&mut self, byte: u8) -> io::Result<Option<ControlCommand>> {
-        if self.reading {
-            self.payload[self.received] = byte;
-            self.received += 1;
-            if self.received == self.payload.len() {
-                self.reading = false;
-                let target = usize::from(u16::from_be_bytes(self.payload[..2].try_into().unwrap()));
-                let request_id = u64::from_be_bytes(self.payload[2..].try_into().unwrap());
-                if target > 128 || request_id == 0 {
-                    return Err(io::Error::other(
-                        "invalid worker resize target or request ID",
-                    ));
+        if self.opcode == 0 {
+            return match byte {
+                b'S' => Ok(Some(ControlCommand::Stop)),
+                b'N' | b'T' | b'Y' | b'K' => {
+                    self.opcode = byte;
+                    self.received = 0;
+                    Ok(None)
                 }
-                return Ok(Some(ControlCommand::Resize(ResizeRequest {
-                    request_id,
-                    target,
-                })));
-            }
+                _ => Err(io::Error::other("invalid worker window command")),
+            };
+        }
+        if self.opcode == b'K' {
+            self.opcode = 0;
+            return if byte <= 128 || byte == 255 {
+                Ok(Some(ControlCommand::MonitorReply(byte)))
+            } else {
+                Err(io::Error::other("invalid monitor resize reply"))
+            };
+        }
+        self.payload[self.received] = byte;
+        self.received += 1;
+        let required = if self.opcode == b'Y' { 18 } else { 10 };
+        if self.received != required {
             return Ok(None);
         }
-        match byte {
-            b'S' => Ok(Some(ControlCommand::Stop)),
-            b'N' => {
-                self.reading = true;
-                self.received = 0;
-                Ok(None)
+        let action = match std::mem::take(&mut self.opcode) {
+            b'N' => ResizeAction::Resize,
+            b'T' => ResizeAction::Prepare,
+            _ => {
+                ResizeAction::Confirm(u64::from_be_bytes(self.payload[10..18].try_into().unwrap()))
             }
-            _ => Err(io::Error::other("invalid worker window command")),
-        }
+        };
+        let request = ResizeRequest {
+            target: usize::from(u16::from_be_bytes(self.payload[..2].try_into().unwrap())),
+            request_id: u64::from_be_bytes(self.payload[2..10].try_into().unwrap()),
+            action,
+        };
+        request.validate().map_err(io::Error::other)?;
+        Ok(Some(ControlCommand::Resize(request)))
     }
 }
 
@@ -640,6 +859,7 @@ impl Drop for WindowChild {
 }
 
 struct ChildState {
+    monitor_pending: AtomicBool,
     stop: AtomicBool,
     ready: AtomicBool,
     reload_sent: AtomicBool,
@@ -690,6 +910,7 @@ fn connect_child(address: SocketAddr, token: &str) -> io::Result<ChildSession> {
     stream.set_read_timeout(Some(Duration::from_millis(250)))?;
     let mut reader = stream.try_clone()?;
     let state = Arc::new(ChildState {
+        monitor_pending: AtomicBool::new(false),
         stop: AtomicBool::new(false),
         ready: AtomicBool::new(false),
         reload_sent: AtomicBool::new(false),
@@ -709,12 +930,21 @@ fn connect_child(address: SocketAddr, token: &str) -> io::Result<ChildSession> {
                     Ok(0) => break,
                     Ok(_) => match decoder.push(byte[0]) {
                         Ok(Some(ControlCommand::Stop)) | Err(_) => break,
+                        Ok(Some(ControlCommand::MonitorReply(target))) => {
+                            if watched.monitor_pending.swap(false, Ordering::AcqRel) {
+                                if target <= 128 {
+                                    super::terminal::notice(&format!("Worker target {target} requested."));
+                                } else {
+                                    super::terminal::notice("Resize rejected. Check pool connection and target (0–128).");
+                                }
+                            }
+                        }
                         Ok(Some(ControlCommand::Resize(request))) => {
                             watched
                                 .resize
                                 .lock()
                                 .unwrap_or_else(|error| error.into_inner())
-                                .pending = Some(request);
+                                .enqueue(request);
                         }
                         Ok(None) => {}
                     },
@@ -750,6 +980,43 @@ fn connect_child(address: SocketAddr, token: &str) -> io::Result<ChildSession> {
     })
 }
 
+pub(super) fn forward_monitor_delta(generation: &str, delta: i32) -> Result<(), String> {
+    let state = CHILD_SESSION
+        .get()
+        .and_then(Weak::upgrade)
+        .ok_or("This worker monitor has no connected main terminal.")?;
+    let mut stream = state.stream.lock().unwrap_or_else(|e| e.into_inner());
+    if state.stop.load(Ordering::Acquire) || !state.ready.load(Ordering::Acquire) {
+        return Err("The worker monitor is reconnecting.".into());
+    }
+    let client_id = state
+        .client_id
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .ok_or("The worker monitor is reconnecting.")?;
+    if !bounded_identity(generation, 128) || delta == 0 || !(-128..=128).contains(&delta) {
+        return Err("Invalid worker count request.".into());
+    }
+    let request = MonitorDelta {
+        client_id,
+        generation: generation.to_owned(),
+        delta,
+    };
+    let mut frame = vec![b'D'];
+    serde_json::to_writer(&mut frame, &request).map_err(|e| e.to_string())?;
+    frame.push(b'\n');
+    if state.monitor_pending.swap(true, Ordering::AcqRel) {
+        return Err("The main terminal is still processing the previous count request.".into());
+    }
+    if let Err(error) = stream.write_all(&frame) {
+        state.stop.store(true, Ordering::Release);
+        let _ = stream.shutdown(Shutdown::Both);
+        return Err(format!("Worker request delivery is unconfirmed: {error}"));
+    }
+    Ok(())
+}
+
 pub(super) fn child_ready(client_id: &str) -> Result<(), String> {
     if let Some(state) = CHILD_SESSION.get().and_then(Weak::upgrade) {
         state.announce_ready(client_id).map_err(|error| {
@@ -783,6 +1050,10 @@ impl ChildState {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         self.ready.store(false, Ordering::Release);
+        self.resize
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .invalidate();
     }
 
     fn request_reload(&self) -> io::Result<()> {
@@ -803,47 +1074,27 @@ impl ChildState {
         Ok(())
     }
 
-    fn take_resize(&self) -> Option<usize> {
-        if self.stop.load(Ordering::Acquire) {
-            return None;
+    fn apply_pending_resize(&self, runtime: &crate::runtime::Runtime) -> Result<(), String> {
+        if self.stop.load(Ordering::Acquire) || !self.ready.load(Ordering::Acquire) {
+            return Ok(());
         }
-        let mut resize = self
-            .resize
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if resize.active.is_some() {
-            return None;
-        }
-        let request = resize.pending.take()?;
-        resize.active = Some(request);
-        Some(request.target)
+        let result = self.resize.lock().unwrap_or_else(|e| e.into_inner()).apply(
+            Instant::now(),
+            |total| {
+                runtime.resize_workers(total)?;
+                super::terminal::notice(&format!("Worker target {total} accepted."));
+                Ok(())
+            },
+            |slot| runtime.prepare_worker_retirement(slot),
+            |ticket| runtime.force_worker_retirement(ticket),
+        );
+        let Some(result) = result else { return Ok(()) };
+        self.publish_resize_receipt()
+            .map_err(|e| format!("could not report Workers change: {e}"))?;
+        result
     }
 
-    fn report_resize(
-        &self,
-        total: usize,
-        result: Result<serde_json::Value, String>,
-    ) -> io::Result<()> {
-        {
-            let mut resize = self
-                .resize
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            let request = resize
-                .active
-                .filter(|request| request.target == total)
-                .ok_or_else(|| {
-                    io::Error::other("resize result does not match the active request")
-                })?;
-            let error = result.err().map(|message| bounded_resize_error(&message));
-            resize.receipt = Some(ResizeReceipt {
-                request_id: request.request_id,
-                target: total,
-                accepted: error.is_none(),
-                error,
-            });
-            resize.active = None;
-        }
+    fn publish_resize_receipt(&self) -> io::Result<()> {
         if self.ready.load(Ordering::Acquire) {
             let client_id = self
                 .client_id
@@ -861,10 +1112,16 @@ impl ChildState {
         if self.stop.load(Ordering::Acquire) {
             return Err(io::Error::other("parent has stopped"));
         }
-        *self
-            .client_id
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = Some(client_id.to_owned());
+        {
+            let mut identity = self.client_id.lock().unwrap_or_else(|e| e.into_inner());
+            if identity.as_ref().is_some_and(|old| old != client_id) {
+                self.resize
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .invalidate();
+            }
+            *identity = Some(client_id.to_owned());
+        }
         self.send_current_snapshot(client_id, !self.ready.load(Ordering::Acquire))
     }
 
@@ -932,17 +1189,11 @@ fn bounded_resize_error(message: &str) -> String {
     text
 }
 
-pub(super) fn report_resize_result(
-    total: usize,
-    result: Result<serde_json::Value, String>,
-) -> Result<(), String> {
-    let state = CHILD_SESSION
-        .get()
-        .and_then(Weak::upgrade)
-        .ok_or("Workers window has no parent control channel")?;
-    state
-        .report_resize(total, result)
-        .map_err(|error| format!("could not report Workers resize result: {error}"))
+pub(super) fn apply_pending_resize(runtime: &crate::runtime::Runtime) -> Result<(), String> {
+    if let Some(state) = CHILD_SESSION.get().and_then(Weak::upgrade) {
+        state.apply_pending_resize(runtime)?;
+    }
+    Ok(())
 }
 
 pub(super) fn child_stop_requested() -> bool {
@@ -950,13 +1201,6 @@ pub(super) fn child_stop_requested() -> bool {
         .get()
         .and_then(Weak::upgrade)
         .is_some_and(|state| state.stop.load(Ordering::Acquire))
-}
-
-pub(super) fn take_resize_request() -> Option<usize> {
-    CHILD_SESSION
-        .get()
-        .and_then(Weak::upgrade)
-        .and_then(|state| state.take_resize())
 }
 
 impl Drop for ChildSession {
@@ -1216,6 +1460,13 @@ fn validate_snapshot(snapshot: &LinkedSnapshot, pid: u32) -> io::Result<()> {
             receipt.request_id == 0
                 || receipt.target > 128
                 || receipt.accepted == receipt.error.is_some()
+                || receipt.confirm_slot.is_some_and(|n| {
+                    !receipt.accepted || n != receipt.target || !(1..=128).contains(&n)
+                })
+                || receipt
+                    .task_id
+                    .as_deref()
+                    .is_some_and(|id| receipt.confirm_slot.is_none() || !bounded_identity(id, 256))
                 || receipt
                     .error
                     .as_ref()
@@ -1248,6 +1499,7 @@ fn read_snapshot(reader: &mut impl Read, pid: u32) -> io::Result<LinkedSnapshot>
     // The readiness byte was consumed by the caller and counts toward the frame.
     match read_child_update_bounded(reader, pid, MAX_STATUS_FRAME_BYTES - 1)? {
         ChildUpdate::Snapshot(snapshot) => Ok(*snapshot),
+        ChildUpdate::Delta(_) => Err(io::Error::other("worker requested resize before readiness")),
         ChildUpdate::Reload => Err(io::Error::other("worker requested reload before readiness")),
     }
 }
@@ -1268,6 +1520,18 @@ fn read_child_update_bounded(
         if byte == *b"\n" {
             if line == b"L" {
                 return Ok(ChildUpdate::Reload);
+            }
+            if let Some(body) = line.strip_prefix(b"D") {
+                let request: MonitorDelta =
+                    serde_json::from_slice(body).map_err(io::Error::other)?;
+                if !bounded_identity(&request.client_id, 128)
+                    || !bounded_identity(&request.generation, 128)
+                    || request.delta == 0
+                    || !(-128..=128).contains(&request.delta)
+                {
+                    return Err(io::Error::other("invalid worker count request"));
+                }
+                return Ok(ChildUpdate::Delta(request));
             }
             let snapshot: LinkedSnapshot =
                 serde_json::from_slice(&line).map_err(io::Error::other)?;
@@ -1715,6 +1979,7 @@ mod tests {
         let state = || ParentState {
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
+            monitor_delta: Mutex::new(None),
             snapshot: Mutex::new(None),
         };
         let old = state();
@@ -1828,6 +2093,8 @@ mod tests {
             target: 3,
             accepted: false,
             error: Some("\\\"".repeat(256)),
+            confirm_slot: None,
+            task_id: None,
         });
         let bytes = encode_snapshot(&status).unwrap();
         assert!(bytes.len() <= MAX_STATUS_BYTES);
@@ -1904,6 +2171,7 @@ mod tests {
         let state = ParentState {
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
+            monitor_delta: Mutex::new(None),
             snapshot: Mutex::new(Some((fixture_snapshot(), Instant::now()))),
         };
         assert!(fresh_snapshot(&state).is_some());
@@ -2090,6 +2358,7 @@ mod tests {
         let parent = ParentState {
             closed: AtomicBool::new(false),
             reload_requested: AtomicBool::new(false),
+            monitor_delta: Mutex::new(None),
             snapshot: Mutex::new(Some((decoded.clone(), Instant::now()))),
         };
         let light = parent.project_snapshot(false).unwrap();
@@ -2312,6 +2581,32 @@ mod tests {
     }
 
     #[test]
+    fn monitor_delta_frames_are_bounded_and_never_accepted_as_readiness_or_forced_retirement() {
+        let pid = std::process::id();
+        let valid = b"D{\"client_id\":\"c\",\"generation\":\"g\",\"delta\":-1}\n";
+        assert!(read_snapshot(&mut &valid[..], pid).is_err());
+        let ChildUpdate::Delta(command) = read_child_update(&mut &valid[..], pid).unwrap() else {
+            panic!("expected scoped monitor delta");
+        };
+        assert_eq!(command.delta, -1);
+        assert_eq!(command.generation, "g");
+        for invalid in [0, -129, 129] {
+            let frame =
+                format!("D{{\"client_id\":\"c\",\"generation\":\"g\",\"delta\":{invalid}}}\n");
+            assert!(read_child_update(&mut frame.as_bytes(), pid).is_err());
+        }
+        for value in [0u8, 5, 128, 255] {
+            let mut decoder = ControlDecoder::default();
+            assert_eq!(decoder.push(b'K').unwrap(), None);
+            assert_eq!(
+                decoder.push(value).unwrap(),
+                Some(ControlCommand::MonitorReply(value))
+            );
+            assert_eq!(decoder.push(b'S').unwrap(), Some(ControlCommand::Stop));
+        }
+    }
+
+    #[test]
     fn resize_commands_are_fixed_size_and_validate_zero_and_maximum() {
         for target in [0, 1, 3, 128] {
             let mut decoder = ControlDecoder::default();
@@ -2323,7 +2618,8 @@ mod tests {
                 decoder.push(encoded[10]).unwrap(),
                 Some(ControlCommand::Resize(ResizeRequest {
                     request_id: 42,
-                    target
+                    target,
+                    action: ResizeAction::Resize,
                 }))
             );
             assert_eq!(decoder.push(b'S').unwrap(), Some(ControlCommand::Stop));
@@ -2339,6 +2635,137 @@ mod tests {
             assert_eq!(decoder.push(byte).unwrap(), None);
         }
         assert!(decoder.push(invalid[10]).is_err());
+    }
+
+    #[test]
+    fn retirement_frames_preserve_the_selected_station_and_preview() {
+        for target in [0, 2, 127] {
+            for action in [ResizeAction::Prepare, ResizeAction::Confirm(7)] {
+                let request = ResizeRequest {
+                    request_id: 8,
+                    target,
+                    action,
+                };
+                let data = request.encode().unwrap();
+                let mut decoder = ControlDecoder::default();
+                for &b in &data[..data.len() - 1] {
+                    assert_eq!(decoder.push(b).unwrap(), None);
+                }
+                assert_eq!(
+                    decoder.push(*data.last().unwrap()).unwrap(),
+                    Some(ControlCommand::Resize(request))
+                );
+                assert_eq!(decoder.push(b'S').unwrap(), Some(ControlCommand::Stop));
+            }
+        }
+        assert_eq!(
+            resize_command(7, 3).unwrap(),
+            [b'N', 0, 3, 0, 0, 0, 0, 0, 0, 0, 7]
+        );
+        for (target, action) in [
+            (128, ResizeAction::Prepare),
+            (2, ResizeAction::Confirm(0)),
+            (2, ResizeAction::Confirm(8)),
+        ] {
+            assert!(
+                ResizeRequest {
+                    request_id: 8,
+                    target,
+                    action
+                }
+                .encode()
+                .is_err()
+            );
+        }
+    }
+
+    fn preview_station(state: &mut ResizeState<&'static str>, now: Instant, request_id: u64) {
+        state.enqueue(ResizeRequest {
+            request_id,
+            target: 2,
+            action: ResizeAction::Prepare,
+        });
+        state
+            .apply(
+                now,
+                |_| unreachable!(),
+                |slot| {
+                    assert_eq!(slot, 2);
+                    Ok(("private-ticket", Some("running-task".into())))
+                },
+                |_| unreachable!(),
+            )
+            .unwrap()
+            .unwrap();
+        let value = serde_json::to_value(state.receipt.as_ref().unwrap()).unwrap();
+        assert_eq!(value["confirm_slot"], 3);
+        assert_eq!(value["task_id"], "running-task");
+        assert!(!value.to_string().contains("private-ticket"));
+    }
+
+    #[test]
+    fn retirement_confirmation_is_local_scoped_expiring_and_single_use() {
+        let start = Instant::now();
+        let mut state = ResizeState::default();
+        let confirm = |request_id, target, prior| ResizeRequest {
+            request_id,
+            target,
+            action: ResizeAction::Confirm(prior),
+        };
+        let denied = |s: &mut ResizeState<&str>, now| {
+            assert!(
+                s.apply(
+                    now,
+                    |_| unreachable!(),
+                    |_| unreachable!(),
+                    |_| panic!("unexpected force")
+                )
+                .unwrap()
+                .is_err()
+            );
+        };
+
+        preview_station(&mut state, start, 1);
+        state.enqueue(confirm(2, 2, 1));
+        let mut forced = Vec::new();
+        state
+            .apply(
+                start,
+                |_| unreachable!(),
+                |_| unreachable!(),
+                |ticket| {
+                    forced.push(*ticket);
+                    Ok(())
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(forced, ["private-ticket"]);
+        state.enqueue(confirm(3, 2, 1));
+        denied(&mut state, start);
+
+        preview_station(&mut state, start, 4);
+        state.enqueue(confirm(5, 1, 4));
+        denied(&mut state, start);
+        preview_station(&mut state, start, 6);
+        state.enqueue(confirm(7, 2, 6));
+        denied(&mut state, start + RETIREMENT_CONFIRMATION_TTL);
+
+        preview_station(&mut state, start, 8);
+        state.invalidate(); // reconnect / reload
+        state.enqueue(confirm(9, 2, 8));
+        denied(&mut state, start);
+
+        preview_station(&mut state, start, 10);
+        state.enqueue(ResizeRequest {
+            request_id: 11,
+            target: 1,
+            action: ResizeAction::Prepare,
+        });
+        state.enqueue(confirm(12, 2, 10)); // even if the intervening selection wasn't polled
+        denied(&mut state, start);
+        state.enqueue(confirm(10, 2, 10));
+        assert!(state.pending.is_none());
     }
 
     #[test]
@@ -2366,6 +2793,7 @@ mod tests {
                 == Some(ResizeRequest {
                     request_id: 2,
                     target: 0,
+                    action: ResizeAction::Resize,
                 })
             {
                 break;
@@ -2374,18 +2802,19 @@ mod tests {
             thread::sleep(Duration::from_millis(5));
         }
         assert!(!session.state.stop.load(Ordering::Acquire));
-        assert_eq!(session.state.take_resize(), Some(0));
-        assert_eq!(session.state.take_resize(), None);
-        assert!(
-            session
-                .state
-                .report_resize(1, Ok(serde_json::Value::Null))
-                .is_err()
+        let mut changes = session.state.resize.lock().unwrap();
+        let result = changes.apply(
+            Instant::now(),
+            |total| {
+                assert_eq!(total, 0);
+                Err("busy\n退役中".repeat(200))
+            },
+            |_| unreachable!(),
+            |_| unreachable!(),
         );
-        session
-            .state
-            .report_resize(0, Err("busy\n退役中".repeat(200)))
-            .unwrap();
+        assert!(result.unwrap().is_err());
+        assert!(changes.pending.is_none());
+        drop(changes);
         session
             .state
             .send_snapshot(&fixture_snapshot(), false)
@@ -2402,17 +2831,22 @@ mod tests {
         parent.write_all(&resize_command(3, 0).unwrap()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
-            if let Some(total) = session.state.take_resize() {
-                assert_eq!(total, 0);
+            let result = session.state.resize.lock().unwrap().apply(
+                Instant::now(),
+                |total| {
+                    assert_eq!(total, 0);
+                    Ok(())
+                },
+                |_| unreachable!(),
+                |_| unreachable!(),
+            );
+            if let Some(result) = result {
+                result.unwrap();
                 break;
             }
             assert!(Instant::now() < deadline);
             thread::sleep(Duration::from_millis(5));
         }
-        session
-            .state
-            .report_resize(0, Ok(serde_json::Value::Null))
-            .unwrap();
         session
             .state
             .send_snapshot(&fixture_snapshot(), false)

@@ -26,12 +26,19 @@ pub(crate) struct Registration {
 }
 
 impl Registration {
-    pub async fn open(metadata: crate::wire::ClientMetadata) -> crate::Result<Self> {
+    pub async fn open_with_instance(
+        metadata: crate::wire::ClientMetadata,
+        instance: Option<String>,
+    ) -> crate::Result<Self> {
         metadata.validate()?;
         let parent = super::super::session_root(true)?.join(LIVE);
         super::super::create_private_tree(&parent)?;
         super::super::verify_directory(&parent)?;
-        let instance = super::super::random_suffix()?;
+        let instance = match instance {
+            Some(value) if valid_instance(&value) => value,
+            Some(_) => return Err("invalid frontend instance".into()),
+            None => super::super::random_suffix()?,
+        };
         let directory = parent.join(&instance);
         crate::platform::private_directory(&directory)?;
         super::super::verify_directory(&directory)?;

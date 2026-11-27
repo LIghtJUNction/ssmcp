@@ -1,6 +1,6 @@
 # 选择中转服务器与固定服务器公钥
 
-客户端把服务器地址和信任配置保存在本机。本文说明原有服务器回退和 HTTPS 公钥固定；命名 context 的优先级及本地／远程切换见[选择连接目标](connection-contexts.md)。账号查询、远程会话列表和新建 HTTPS / WSS 连接先解析显式目标或 context，再使用这里的服务器回退。每个服务器的账号凭据仍单独保存。[地址选择实现](../src/client/account.rs) · [配置命令](../src/client/config.rs)
+客户端把服务器地址和信任配置保存在本机。本文说明原有服务器回退和 HTTPS 公钥固定；命名 context 的优先级及本地／远程切换见[选择连接目标](connection-contexts.md)。账号查询等管理命令可以使用这里的回退地址。新建设备连接时，命令行必须显式指定用户名和中继。每个服务器的账号凭据仍单独保存。[地址选择实现](../src/client/account.rs) · [配置命令](../src/client/config.rs)
 
 ## 设置回退服务器
 
@@ -22,7 +22,7 @@ ssmcp whoami alice@other.example.com
 ssmcp alice@other.example.com
 ~~~
 
-命名目标和 `--server` 对本次命令生效，保留原有 `[client].server`。设备连接成功后保存目标，供裸 `ssmcp` 复用。控制端凭据仍按服务器隔离。
+命名目标和 `--server` 对本次命令生效，保留原有 `[client].server`。每次发起设备连接都需要指定 `用户名@服务器`。控制端凭据仍按服务器隔离。
 
 ### 直接编辑配置文件
 

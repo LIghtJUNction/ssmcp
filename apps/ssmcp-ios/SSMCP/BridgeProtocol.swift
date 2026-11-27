@@ -135,6 +135,15 @@ final class EventInbox {
 }
 
 enum BridgeProtocol {
+    static func createdSession(_ raw: JSONObject, requestID: String) throws -> String {
+        if let session = raw["session"] as? String, raw["request_id"] as? String == requestID,
+           session.hasPrefix("live:"), session.utf8.count == 37,
+           session.utf8.dropFirst(5).allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) {
+            return session
+        }
+        throw BridgeFailure("unconfirmed", "新建会话回执与原请求不匹配。", effect: "may_have_occurred")
+    }
+
     static let maxFrame = 256 * 1024
     static let maxPage = 128 * 1024
     static let maxObservationMS = 55_000

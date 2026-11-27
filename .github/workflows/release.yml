@@ -205,11 +205,15 @@ jobs:
     if: needs.validate.outputs.publish == 'true' || needs.validate.outputs.build_only == 'true'
     uses: ./.github/workflows/ci.yml
     with:
+      release_run_id: ${{ github.run_id }}
       ref: ${{ needs.validate.outputs.sha }}
 
   gui:
     needs: validate
     if: needs.validate.outputs.gui_clients == 'true' && (needs.validate.outputs.publish == 'true' || needs.validate.outputs.build_only == 'true')
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/gui-clients.yml
     with:
       ref: ${{ needs.validate.outputs.sha }}

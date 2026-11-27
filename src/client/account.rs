@@ -17,12 +17,12 @@ use tokio::process::Command;
 
 pub(crate) mod device_identity;
 pub(crate) mod foreground_identity;
+pub(crate) mod managed;
 pub(super) mod status;
 
 pub(super) const DEFAULT_SERVER: &str = "https://ssmcp.lmm.best";
 const STORE_LIMIT: usize = 32 * 1024;
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
-#[cfg(any(test, target_os = "linux"))]
 const MAX_USERNAME_ALIASES: usize = 128;
 
 #[cfg(any(test, target_os = "linux"))]
@@ -255,6 +255,31 @@ pub(super) fn last_connection() -> Result<Option<LastConnection>> {
     verify_directory(&root)?;
     read_private(&root.join("last-connection.json"))?
         .map(|bytes| serde_json::from_slice(&bytes).map_err(Into::into))
+        .transpose()
+}
+
+// A saved desktop target records the user's explicit Connect action. CLI history
+// also includes headless launches and therefore cannot stand in for this choice.
+pub(crate) fn desktop_profile(save: Option<&str>) -> Result<Option<String>> {
+    let root = state_root()?;
+    if save.is_some() {
+        create_tree(&root)?;
+    }
+    if !root.try_exists()? {
+        return Ok(None);
+    }
+    verify_directory(&root)?;
+    let path = root.join("desktop-target-v1.json");
+    if let Some(target) = save {
+        crate::connection_form::validate_destination(target)?;
+        write_private(&path, &serde_json::to_vec(target)?)?;
+    }
+    read_private_limit(&path, 1024)?
+        .map(|bytes| {
+            let target: String = serde_json::from_slice(&bytes)?;
+            crate::connection_form::validate_destination(&target)?;
+            Ok(target)
+        })
         .transpose()
 }
 
@@ -576,7 +601,6 @@ impl Arguments {
     }
 }
 
-#[cfg(any(test, target_os = "linux"))]
 fn public_identity(value: &Value) -> Result<Value> {
     let identity = value.get("identity").unwrap_or(value);
     let login = identity["login"]
@@ -638,7 +662,6 @@ fn public_identity(value: &Value) -> Result<Value> {
 
 // Only use metadata validated by public_identity from this relay's authenticated
 // response. Aliases never enter the credential cache or replace subject checks.
-#[cfg(test)]
 fn identity_matches_username(identity: &Value, requested: &str) -> bool {
     identity["username"].as_str() == Some(requested)
         || identity["username_aliases"]
@@ -650,12 +673,45 @@ fn identity_matches_username(identity: &Value, requested: &str) -> bool {
             })
 }
 
-pub(crate) async fn open_browser(url: &Url) -> Result<()> {
-    let mut command = if cfg!(windows) {
+pub(crate) async fn registration_url(destination: &str) -> Result<String> {
+    let (username, origin) = crate::server_endpoint::parse_target(destination)?;
+    let api = Api::new(&origin)?;
+    let reply = api
+        .request(
+            Method::POST,
+            "/api/client/registration/start",
+            None,
+            Some(json!({"name": "ssmcp", "username": username})),
+        )
+        .await?;
+    let value = Api::checked(reply)?;
+    let code = value["user_code"]
+        .as_str()
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 64
+                && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        })
+        .ok_or("relay returned an invalid registration code")?;
+    let mut url = Url::parse(&origin)?.join("/setup")?;
+    url.query_pairs_mut().append_pair("code", code);
+    Ok(url.to_string())
+}
+
+fn browser_command(url: &Url) -> Command {
+    if cfg!(windows) {
         let mut c = Command::new("rundll32.exe");
         c.args(["url.dll,FileProtocolHandler", url.as_str()]);
         c
     } else if cfg!(target_os = "android") {
+        if let Some(prefix) = std::env::var_os("PREFIX") {
+            let opener = Path::new(&prefix).join("bin/termux-open-url");
+            if opener.is_absolute() && opener.is_file() {
+                let mut command = Command::new(opener);
+                command.arg(url.as_str());
+                return command;
+            }
+        }
         let mut c = Command::new("/system/bin/am");
         c.args([
             "start",
@@ -673,8 +729,25 @@ pub(crate) async fn open_browser(url: &Url) -> Result<()> {
         let mut c = Command::new("xdg-open");
         c.arg(url.as_str());
         c
-    };
+    }
+}
+
+pub(crate) fn open_desktop_link(url: &Url) -> Result<()> {
+    let mut command = browser_command(url);
     let mut child = command
+        .as_std_mut()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+pub(crate) async fn open_browser(url: &Url) -> Result<()> {
+    let mut child = browser_command(url)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -828,6 +901,7 @@ pub(super) async fn dispatch(args: &[OsString]) -> Result<bool> {
     };
     match command.to_str() {
         Some("list" | "ls") => crate::session::list_command(rest).await?,
+        Some(command @ ("login" | "join")) => managed::command(command, rest).await?,
         Some("attach") => crate::session::attach::manage(rest.to_vec()).await?,
         Some("send" | "wait" | "logout") => return Err("this device accepts control through its authorized controller; use the controller for account and remote operations".into()),
         _ if standalone_interactive(args) => return Err("interactive control of remote devices is unavailable in the device client; use ssmcp attach NAME for a local session".into()),

@@ -18,7 +18,7 @@ SSMCP 针对长时间运行的 Agent 任务优化原生异步执行与事件驱�
 
 **Linux 与 macOS 是首要支持目标。** 功能开发、兼容性修复和日常验收优先覆盖这两个平台；Windows 客户端持续适配，并提供对应的原生测试与发布附件。
 
-同一个账号可以同时连接多台设备，Agent 通过一个 MCP 端点选择具体设备和会话。**受控设备无需登录你的 AI 账号**：AI 应用持有 MCP 授权，设备持有自己的 SSMCP 授权；命令在被选中的设备上执行。CLI 面向专业开发者，适合脚本、服务管理和诊断；Windows 用户的日常连接与任务管理优先使用[桌面版](apps/ssmcp-desktop/README.md)。
+Agent 通过一个 MCP 端点选择具体设备和会话。被控端用自己的 SSMCP 账号授权上线，AI 应用另行取得控制权限，命令在选中的设备上执行。启用计费时，每个免费账号可以同时保持一个在线会话，正式充值账号可以同时在线多个会话。CLI 适合脚本、服务管理和诊断，Windows 的日常连接也可使用[桌面版](apps/ssmcp-desktop/README.md)。
 
 你可以让不同会话分别实现功能、检查改动和运行测试，通过成员身份和定向消息协作，把结果提交到同一个项目。[了解集群协作](docs/agent-collaboration.md)
 
@@ -79,21 +79,24 @@ Worker 面板和 Sessions 的 Recipients 按当前连接上已认证的成员 ID
 
 ## 快速开始
 
+在终端启动时，写出完整的 `用户名@中继服务器`。默认打开 TUI。`--webui` 打开浏览器，`--gui` 打开桌面版。直接启动桌面应用、运行 `ssmcp gui` 或 `ssmcp webui` 可先填写连接表单。裸 `ssmcp` 显示用法并退出。
+
 ### 1. 选择客户端并安装
 
 Windows 用户推荐桌面版。桌面版复用 CLI 的会话和权限系统，提供连接、任务进度和按需展开的诊断界面。下载前核对[平台构建与发布状态](docs/clients.md)；源码和 CI 中的构建结果不表示所有平台已有正式发布包。
 
 需要命令行、自动化或后台服务的专业开发者可安装 CLI：
 
-Android 上使用 Termux 安装 CLI，默认校验并安装正式版预编译包。首次运行会创建 Debian Bookworm 容器。需要在手机上编译时，把最后的 `bin` 改为 `source`。两个模式都接受可选版本号。
+Termux 可直接安装 Android 原生 CLI。安装脚本核对发行包的 SHA-256 和程序版本，然后将 CLI 放入 Termux 的 `$PREFIX/bin`。需要在手机上编译时，把 `bin` 改为 `source`。两个模式均可追加版本号。
 
 ```sh
 curl -fL https://raw.githubusercontent.com/LIghtJUNction/ssmcp/main/scripts/install-ssmcp-termux.sh -o install-ssmcp-termux.sh
 sh install-ssmcp-termux.sh bin
-proot-distro login ssmcp-debian -- /root/.local/bin/ssmcp --version
+ssmcp alice@ssmcp.lmm.best          # TUI
+ssmcp alice@ssmcp.lmm.best --webui  # 打开 Android 浏览器
 ```
 
-Termux 已安装时，用 `sh install-ssmcp-termux.sh update` 更新。需要在已 root 的 Android 上开机运行时，可从源码构建 [SSMCP Magisk 模块](packaging/magisk/README.md)，刷入后通过手机网页配置和查看会话。
+Termux 安装后，用 `ssmcp update --check` 查看版本，或用 `ssmcp update` 更新。需要在已 root 的 Android 上开机运行时，可从源码构建 [SSMCP Magisk 模块](packaging/magisk/README.md)，刷入后通过手机网页配置和查看会话。
 
 Linux / macOS：
 
@@ -124,7 +127,7 @@ ssmcp update           # 校验下载后替换当前安装
 ssmcp alice@relay.example.com --name dev --title "开发与测试"
 ```
 
-把 `alice` 换成控制者在该中继登记的用户名。设备从当前项目目录主动建立 HTTPS/WSS 连接，接受该账号获准的操作。账号登录在控制者的浏览器完成。下次直接运行 `ssmcp` 可以复用上一次前台连接目标。
+把 `alice` 换成控制者在该中继登记的用户名。设备从当前项目目录主动建立 HTTPS/WSS 连接，接受该账号获准的操作。账号登录在控制者的浏览器完成。下次从终端连接时，仍需输入 `ssmcp 用户名@中继服务器`。
 
 完整步骤见[账号与设备](docs/client-accounts.md)和[默认服务器与可信公钥](docs/client-server.md)。
 
@@ -146,7 +149,7 @@ ssmcp alice@relay.example.com --name dev --title "开发与测试"
 
 `link` 的候选实现调用目标客户端的图片读取工具，单图上限 400 KiB；默认 120 秒失效，首次 GET 会消费链接，HEAD 不消费。创建返回 URL、资源链接和清理 ID，不返回图片 base64。是否已部署须查看当前服务目录。[临时图片链接 API](docs/image-links.md)
 
-由被控端用户在愿意开放的项目目录运行 `ssmcp 用户名@中继服务器`。这里填写控制者在该中继已注册的用户名，被控端无需登录。控制者用 MCP 应用完成该中继的 OAuth 授权。连接成功后，直接运行 `ssmcp` 会复用上一次连接。用户名和公告在中继的账户页面管理。
+在愿意开放的项目目录运行 `ssmcp 用户名@中继服务器`，首次按提示完成被控端的设备 OAuth 登录。账号验证通过后会话上线。需要共享给其他用户时，在会话中输入 `/allow add 用户名`，用 `/allow list` 查看，用 `/allow remove 用户名` 移除。控制者在自己的 MCP 应用中完成 OAuth。[账号与授权](docs/client-accounts.md)
 
 主窗口中的 `/invite` 生成会话内工作组协作说明，Agent 通过 `collab.join` 登记会话身份。协作邀请与设备授权各自独立。[账号与授权](docs/client-accounts.md)
 
@@ -186,7 +189,7 @@ ssmcp alice@relay.example.com --name dev --title "本地开发"
 ssmcp alice@relay.example.com --name build --daemon
 ```
 
-每台设备需要安装并启动 SSMCP，不需要安装或登录 AI 应用。可使用设备授权邀请，也可使用上文的 `用户名@中继服务器` 连接方式；这些授权由设备用户决定，不能从一个 AI 账号推导出所有机器的控制权限。账号登录、设备接入凭据和 AI 应用的 MCP OAuth 授权分别管理。
+每台设备单独安装 SSMCP 并验证设备启动者的账号。有效设备授权可以复用。使用邀请时，设备启动者也需在同一个中继完成身份验证。设备接入和 AI 应用的 MCP 控制授权分别管理。
 
 当前源码为完成身份签名协商的账号连接返回以下地址信息；实际运行版本以 `list` 的字段和实时 schema 为准：
 
@@ -256,16 +259,16 @@ Linux 上可以使用 `ssmcp local` 在当前项目启动本地 MCP 会话，无
 
 ### 使用同一入口选择连接目标
 
-把本机或 HTTPS 中继保存为命名 context，随后用同一个参数选择：
+把本机或 HTTPS 中继保存为命名 context，可通过名称查询目标：
 
 ~~~sh
 ssmcp context create here --local
 ssmcp context create work --server https://relay.example.com
-ssmcp --context work --username alice --name dev
+ssmcp alice@relay.example.com --name dev
 ssmcp context use here
 ~~~
 
-`--context` 只选择本次目标，`context use` 保存新连接的默认选择；已有连接和保存的 session 继续使用原目标。用 `ssmcp context show` 查看目标与选择来源。命名目标不保存账号凭据；完整优先级和本地运行前提见[本地与远程目标](docs/connection-contexts.md)。安装版本是否支持，以 `ssmcp context --help` 为准。
+`context use` 保存账号查询等管理命令的默认选择。中继连接须显式填写用户名与服务器；已有连接和保存的 session 继续使用原目标。用 `ssmcp context show` 查看目标与选择来源。命名目标不保存账号凭据；完整优先级和本地运行前提见[本地与远程目标](docs/connection-contexts.md)。安装版本是否支持，以 `ssmcp context --help` 为准。
 
 ### 对话与工具
 
@@ -308,7 +311,7 @@ Agent 使用 `ssmcp.ui.message` 把进度与回答显示在这个会话里；重
 在项目目录的交互终端启动主聊天和关联的 worker 监控窗口：
 
 ~~~sh
-ssmcp --worker 3
+ssmcp alice@relay.example --worker 3
 ~~~
 
 这会创建三个初始离线的席位。默认 worker 是外部 Agent，继续使用它自己的应用和模型；SSMCP 提供任务队列、工具与回执，不启动模型。主窗口保留聊天输入，worker 窗口默认以全宽时间线展示 Agent 实际上报的进度，并显示当前任务和状态。尚无上报时明确等待；警告、错误和 `unknown` 保持可见。按 **F2** 查看日志与本机 SSMCP 资源详情，**F1** 查看帮助，**T** 查看任务全文。[监控操作](docs/workers.md#use-the-monitor)

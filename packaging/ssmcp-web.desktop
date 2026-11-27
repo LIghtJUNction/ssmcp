@@ -2,7 +2,7 @@
 Type=Application
 Name=SSMCP Web
 Comment=Open SSMCP sessions in your browser
-Exec=ssmcp gui open
+Exec=ssmcp webui
 Icon=web-browser
 Terminal=false
 Categories=Development;Network;

@@ -219,4 +219,5 @@ case ":$PATH:" in
     *) printf 'Add this directory to PATH: %s\n' "$install_dir" ;;
 esac
 printf 'Use the controller username from the relay account page. In your project directory run:\n'
-printf '  ssmcp --username USERNAME --server %s\n' 'https://ssmcp.lmm.best'
+relay_origin='https://ssmcp.lmm.best'
+printf '  ssmcp USERNAME@%s\n' "${relay_origin#https://}"

@@ -47,13 +47,28 @@ impl RelayAccess {
         if resource != IDENTITY_RESOURCE {
             return None;
         }
+        self.principal_for_token(token).map(Authorization::Identity)
+    }
+
+    fn principal_for_token(&self, token: &str) -> Option<Identity> {
         let digest = token_digest(token)?;
         let name = self
             .principals
             .iter()
             .find(|(_, value)| bool::from(value.as_bytes().ct_eq(digest.as_bytes())))?
             .0;
-        self.identity(name).map(Authorization::Identity)
+        self.identity(name)
+    }
+
+    /// The trusted ingress authenticates the registering account separately
+    /// from the device's local choice of permitted controllers.
+    pub(crate) fn device_principal(&self, headers: &axum::http::HeaderMap) -> Option<Identity> {
+        let mut values = headers.get_all(axum::http::header::AUTHORIZATION).iter();
+        let token = values.next()?.to_str().ok()?.strip_prefix("Bearer ")?;
+        if values.next().is_some() {
+            return None;
+        }
+        self.principal_for_token(token)
     }
 
     pub(crate) fn permit_ingress(&self, headers: &axum::http::HeaderMap) -> bool {

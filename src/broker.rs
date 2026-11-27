@@ -1370,6 +1370,11 @@ impl Broker {
             peer.account
                 .as_ref()
                 .map(|account| account.username.clone())
+                .or_else(|| {
+                    peer.external_user_id
+                        .as_ref()
+                        .map(|id| format!("external:{id}"))
+                })
                 .unwrap_or_else(|| "_anonymous".into()),
             Some(peer),
             traffic_failure,
@@ -1406,17 +1411,16 @@ impl Broker {
         T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
     {
         let is_device = peer.is_some();
-        let anonymous = peer.as_ref().is_some_and(|peer| peer.account.is_none());
+        let commercial_portal = self.portal.commerce_enabled();
         let registration = peer.as_ref().and_then(|peer| peer.account.as_ref());
         let (reader, mut writer) = tokio::io::split(stream);
         let mut reader = BufReader::new(reader);
         let first = timeout(IO_TIMEOUT, wire::read_frame(&mut reader)).await??;
         let (first, guarded_target) = match first {
             Some(Frame::ResolveController { id: 0, principal })
-                if anonymous
-                    && peer
-                        .as_ref()
-                        .is_some_and(|p| p.session_access && p.control_attribution) =>
+                if peer
+                    .as_ref()
+                    .is_some_and(|p| p.session_access && p.control_attribution) =>
             {
                 let identity = match self.resolve_controller(&principal).await {
                     Ok(identity) => identity,
@@ -1513,15 +1517,36 @@ impl Broker {
                         .map(str::to_owned)
                 }
             });
-        if self.portal.has_storage() && owner.is_none() && !anonymous {
+        let external_id = peer.as_ref().and_then(|p| p.external_user_id.as_deref());
+        if self.relay_access.is_some() && external_id.is_none() {
             wire::write_frame(
                 &mut writer,
                 &Frame::Reject {
-                    message: crate::user_policy::TrafficError::AccountRequired.to_string(),
+                    message: "device_verification_required: external account credential required"
+                        .into(),
                 },
             )
             .await?;
             return Ok(());
+        }
+        if self.relay_access.is_none() {
+            let verified = match owner.as_ref() {
+                Some(_) if registration.is_some() => true,
+                Some(subject) => {
+                    let subject = subject.clone();
+                    self.portal
+                        .storage(move |store| store.account(&subject))
+                        .await
+                        .is_ok()
+                }
+                None => false,
+            };
+            if !verified {
+                wire::write_frame(&mut writer, &Frame::Reject {
+                    message: "device_verification_required: sign in on the controlled device or use SSH mapped to a registered OAuth account; the server must have account storage configured".into(),
+                }).await?;
+                return Ok(());
+            }
         }
         if owner
             .as_deref()
@@ -1589,8 +1614,8 @@ impl Broker {
         let control_attribution = peer.as_ref().is_some_and(|peer| peer.control_attribution);
         let main_activity = peer.as_ref().is_some_and(|peer| peer.main_activity);
         let main_lifecycle = peer.as_ref().is_some_and(|peer| peer.main_lifecycle);
-        let native_messages =
-            registration.is_some() && peer.as_ref().is_some_and(|peer| peer.native_messages);
+        let native_messages = registration.is_some_and(|r| !r.device_only)
+            && peer.as_ref().is_some_and(|peer| peer.native_messages);
         let version_notice_supported = peer.as_ref().is_some_and(|peer| peer.version_notice);
         let wait_display_version = peer
             .as_ref()
@@ -1621,6 +1646,8 @@ impl Broker {
         let member_activity =
             control_attribution && peer.as_ref().is_some_and(|peer| peer.worker_activity);
         let worker_activity = worker_dreaming && member_activity;
+        let worker_productivity =
+            worker_activity && peer.as_ref().is_some_and(|peer| peer.worker_productivity);
         let peer_ports = access_supported
             && control_attribution
             && peer
@@ -1631,9 +1658,9 @@ impl Broker {
             && peer
                 .as_ref()
                 .is_some_and(|p| p.peer_ports_auto && !p.peer_ports);
-        // Ordinary foreground relay registrations carry no account bearer. Proofs never
-        // populate device routing, ownership, or an access credential.
-        let project = anonymous
+        // A project proof links two authorized registrations with the same ACL.
+        // Signed device addresses use their own routing mechanism.
+        let project = registration.is_none_or(|r| r.device_identity.is_none())
             && access_supported
             && control_attribution
             && !chat_disabled
@@ -1693,6 +1720,24 @@ impl Broker {
         if openai_context_supported {
             capabilities.push(wire::openai::CAPABILITY.into());
         }
+        let external_paid =
+            if let (Some(accounting), Some(id)) = (&self.relay_accounting, external_id) {
+                match accounting.has_recharged(id).await {
+                    Ok(paid) => Some(paid),
+                    Err(_) => {
+                        wire::write_frame(
+                            &mut writer,
+                            &Frame::Reject {
+                                message: "could not verify the account session allowance".into(),
+                            },
+                        )
+                        .await?;
+                        return Ok(());
+                    }
+                }
+            } else {
+                None
+            };
         let login_code = if restricted {
             String::new()
         } else {
@@ -1756,15 +1801,36 @@ impl Broker {
             });
         {
             let mut sessions = self.sessions.write().await;
-            if sessions
-                .get(&user)
-                .is_some_and(|clients| clients.len() >= wire::MAX_CLIENTS_PER_USER)
-            {
+            // Check and insert under the same lock, including connections using another
+            // SSH username or transport for the same authenticated account.
+            let rejection = match session.owner_subject.as_deref() {
+                Some(subject) if commercial_portal => (!self.user_policies.has_recharged(subject)
+                    && sessions.values().any(|clients| {
+                        clients.values().any(|client| {
+                            client.is_alive() && client.owner_subject.as_deref() == Some(subject)
+                        })
+                    }))
+                .then_some(
+                    "online_session_limit: free accounts can have one online session at a time",
+                ),
+                _ if external_paid.is_some() => (external_paid == Some(false)
+                    && sessions
+                        .get(&user)
+                        .is_some_and(|clients| clients.values().any(|s| s.is_alive())))
+                .then_some(
+                    "online_session_limit: free accounts can have one online session at a time",
+                ),
+                _ => sessions
+                    .get(&user)
+                    .is_some_and(|clients| clients.len() >= wire::MAX_CLIENTS_PER_USER)
+                    .then_some("this user has reached the 128-client connection limit"),
+            };
+            if let Some(message) = rejection {
                 drop(sessions);
                 wire::write_frame(
                     &mut writer,
                     &Frame::Reject {
-                        message: "this user has reached the 128-client connection limit".into(),
+                        message: message.into(),
                     },
                 )
                 .await?;
@@ -1824,6 +1890,7 @@ impl Broker {
         // later ACL edits and of other controllers on this device.
         let mut pending: HashMap<u64, PendingCall> = HashMap::new();
         let mut proposed_controller: Option<(u64, String, Identity)> = None;
+        let device_lease = registration.filter(|r| r.device_only);
         let mut result: crate::Result<()> = tokio::select! {
             biased;
             _ = session.disconnect.notified() => { self.project_continuity.forget(&client_id); Ok(()) },
@@ -1833,6 +1900,13 @@ impl Broker {
                     None => std::future::pending::<()>().await,
                 }
             } => Ok(()),
+            _ = async {
+                if let Some(credential) = device_lease {
+                    credential.wait_revoked(&self).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => Err("device authorization expired or was revoked".into()),
             result = async {
             session.audit_record(session.audit_event(crate::history::AuditAction::SessionConnected, crate::history::AuditOutcome::Success)).await.map_err(|_| "connection audit could not be saved; connection was not accepted")?;
             let version_notice = if version_notice_supported {
@@ -2009,7 +2083,7 @@ impl Broker {
                                 }
                             }
                             if worker_activity {
-                                let members = session.collaboration.worker_activity()?;
+                                let members = session.collaboration.worker_activity(worker_productivity)?;
                                 if members != last_worker_activity {
                                     let frame = Frame::WorkerActivity { members: members.clone() };
                                     timeout(IO_TIMEOUT, wire::write_frame(&mut writer, &frame)).await??;
@@ -2371,9 +2445,9 @@ mod tests {
 
     #[tokio::test]
     async fn current_protocol_carries_controller_and_code_audit() {
-        let broker = Arc::new(Broker::new("https://example.test".into()));
+        let (_directory, broker) = super::traffic::tests::fixture().await;
         let (server, client) = UnixStream::pair().unwrap();
-        let server_task = tokio::spawn(broker.clone().attach(server));
+        let server_task = tokio::spawn(broker.clone().attach_stream(server, "gh-123".into(), None));
         let (reader, mut writer) = client.into_split();
         let mut reader = BufReader::new(reader);
         wire::write_frame(
@@ -2868,9 +2942,9 @@ mod tests {
     #[tokio::test]
     async fn fragmented_replies_survive_concurrent_calls_and_disconnect_revokes_secret() {
         use tokio::io::AsyncWriteExt;
-        let broker = Arc::new(Broker::new("https://example.test".into()));
+        let (_directory, broker) = super::traffic::tests::fixture().await;
         let (server, client) = UnixStream::pair().unwrap();
-        let task = tokio::spawn(broker.clone().attach(server));
+        let task = tokio::spawn(broker.clone().attach_stream(server, "gh-123".into(), None));
         let (reader, mut writer) = client.into_split();
         let mut reader = BufReader::new(reader);
         wire::write_frame(
@@ -2948,7 +3022,7 @@ mod tests {
 
     #[tokio::test]
     async fn same_owner_clients_have_unique_ids_and_disconnect_independently() {
-        let broker = Arc::new(Broker::new("https://example.test".into()));
+        let (_directory, broker) = super::traffic::tests::fixture().await;
         let mut attachments = Vec::new();
         let mut credentials = Vec::new();
         for (mode, cwd) in [
@@ -2956,7 +3030,7 @@ mod tests {
             (wire::Mode::Codex, "/second"),
         ] {
             let (server, client) = UnixStream::pair().unwrap();
-            let task = tokio::spawn(broker.clone().attach(server));
+            let task = tokio::spawn(broker.clone().attach_stream(server, "gh-123".into(), None));
             let mut stream = BufReader::new(client);
             wire::write_frame(
                 stream.get_mut(),
@@ -3351,6 +3425,12 @@ mod tests {
         std::fs::set_permissions(&temporary.0, std::fs::Permissions::from_mode(0o700)).unwrap();
         let audit_dir = temporary.0.join("audit");
         let mut broker = Broker::new("https://example.test".into());
+        broker.portal = crate::portal::Portal::open(&temporary.0.join("accounts")).unwrap();
+        broker
+            .portal
+            .storage(|store| store.login(&github("123", "alice")))
+            .await
+            .unwrap();
         broker.configure_management(
             crate::management::ManagementPolicy::default(),
             Arc::new(
@@ -3435,8 +3515,8 @@ mod tests {
 
     #[tokio::test]
     async fn registration_rejects_bad_metadata_and_limits_without_replacing_clients() {
-        let broker = Arc::new(Broker::new("https://example.test".into()));
-        let user = username(unsafe { libc::getuid() }).unwrap();
+        let (_directory, broker) = super::traffic::tests::fixture().await;
+        let user = String::from("gh-123");
         let anchor = session("anchor", &"a".repeat(64));
         {
             let mut sessions = broker.sessions.write().await;
@@ -3452,7 +3532,7 @@ mod tests {
             (metadata("bad\nname", "/project"), "control characters"),
         ] {
             let (server, client) = UnixStream::pair().unwrap();
-            let task = tokio::spawn(broker.clone().attach(server));
+            let task = tokio::spawn(broker.clone().attach_stream(server, "gh-123".into(), None));
             let mut stream = BufReader::new(client);
             wire::write_frame(
                 stream.get_mut(),

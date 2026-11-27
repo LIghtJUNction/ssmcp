@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Gateway, readPairingToken, takeMagiskPairing } from '../src/gateway.mjs';
+import { Gateway, launchOptions, readPairingToken, takeLaunchPairing } from '../src/gateway.mjs';
 import { createRequest, MAX_FRAME_BYTES } from '../src/protocol.mjs';
 import { response, eventPage, observation, GENERATION, capabilities } from './fixtures.mjs';
 
@@ -15,18 +15,49 @@ test('module owner pairing scrubs the fragment before accepting the exact local 
   ]) {
     const location = new URL(url + '#' + token), scrubbed = [];
     const history = { replaceState: (_, __, clean) => scrubbed.push(clean) };
-    assert.equal(takeMagiskPairing(location, history, modulePage), expected);
+    assert.equal(takeLaunchPairing(location, history, modulePage), expected);
     assert.deepEqual(scrubbed, [url]);
   }
   const location = new URL(home + '#' + token);
   let replacement;
   location.replace = url => { replacement = url; };
-  assert.equal(takeMagiskPairing(location, { replaceState() { throw new Error(); } }, true), null);
+  assert.equal(takeLaunchPairing(location, { replaceState() { throw new Error(); } }, true), null);
   assert.equal(replacement, home);
   for (const invalid of ['#' + token.toUpperCase(), '#not-a-module-secret']) {
     const clean = [];
-    assert.equal(takeMagiskPairing(new URL(home + invalid), { replaceState: (_, __, url) => clean.push(url) }, true), null);
+    assert.equal(takeLaunchPairing(new URL(home + invalid), { replaceState: (_, __, url) => clean.push(url) }, true), null);
     assert.deepEqual(clean, [home]);
+  }
+});
+
+test('CLI handoff pairs only a single explicit live selector on the loopback landing page', () => {
+  const token = 'ab'.repeat(32), session = 'live:' + 'cd'.repeat(16);
+  const query = '?session=' + encodeURIComponent(session);
+  for (const [base, search, accepted] of [
+    ['http://127.0.0.1:8011/', query, true],
+    ['http://127.0.0.1:8011/', query + '&session=' + session, false],
+    ['http://127.0.0.1:8011/other', query, false],
+    ['http://127.0.0.1:8011/', '?session=saved:other', false],
+    ['https://foreign.example/', query, false],
+  ]) {
+    const url = new URL(base + search + '#' + token), clean = [];
+    assert.deepEqual(launchOptions(url), accepted ? {session} : null);
+    assert.equal(takeLaunchPairing(url, {replaceState: (_, __, address) => clean.push(address)}, false), accepted ? token : null);
+    assert.deepEqual(clean, [base + search]);
+  }
+});
+
+test('desktop setup accepts only the exact informational refusal marker on loopback', () => {
+  const token = 'ab'.repeat(32), base = 'http://127.0.0.1:8011/';
+  for (const [query, expected] of [
+    ['?setup=1&launch_refused=1', true], ['?launch_refused=1&setup=1', true],
+    ['?launch_refused=1', false], ['?setup=1&launch_refused=0', false],
+    ['?setup=1&launch_refused=1&relay=other.test', false], ['?setup=1&setup=1', false],
+  ]) {
+    const url = new URL(base + query + '#' + token);
+    assert.deepEqual(launchOptions(url), expected ? {setup:true, refused:true} : null);
+    assert.equal(takeLaunchPairing(url, {replaceState() {}}, false), expected ? token : null);
+    assert.equal(takeLaunchPairing(url, {replaceState() {}}, true), null);
   }
 });
 
@@ -148,4 +179,114 @@ test('lost or malformed close acknowledgement is a possibly completed mutation',
     const gateway = new Gateway({ fetchImpl }); gateway.setToken('pairing');
     await assert.rejects(gateway.close('original.connection'), error => error.effect === 'may_have_occurred');
   }
+});
+
+test('owned creation binds the exact receipt and only retries the original explicit request', async () => {
+  const bodies = [], target = 'live:' + '3a'.repeat(16);
+  let respond = () => { throw new Error('connection lost'); };
+  const gateway = new Gateway({ fetchImpl: async (path, init) => {
+    assert.equal(path, '/api/gui/v1/owned-sessions');
+    assert.equal(init.method, 'POST'); assert.equal(init.redirect, 'error');
+    assert.equal(init.headers.Authorization, 'Bearer pair');
+    const body = JSON.parse(init.body); bodies.push(body); return respond(body);
+  }});
+  const args = { destination: 'alice@relay.example', terms: false, privacy: false };
+  await assert.rejects(gateway.createOwnedSession(args), /配对/);
+  gateway.setToken('pair');
+  await assert.rejects(gateway.createOwnedSession(args), {effect: 'may_have_occurred'});
+  await assert.rejects(gateway.createOwnedSession({...args, privacy: true}), {code: 'pending'});
+  assert.equal(bodies.length, 1);
+  for (const invalid of [{session:target, request_id:'other'}, {session:'live:bad'},
+    {session:target + '\n'}, {session:[target]}, {session:target.toUpperCase()}]) {
+    respond = body => json({request_id:body.request_id, ...invalid});
+    await assert.rejects(gateway.createOwnedSession(args), {effect:'may_have_occurred'});
+  }
+  respond = () => json({error:{code:'denied', effect:'none', message:'denied'}}, 403);
+  await assert.rejects(gateway.createOwnedSession(args), {status:403});
+  gateway.setToken('pair');
+  respond = body => json({request_id:body.request_id, session:target});
+  assert.equal(await gateway.createOwnedSession(args), target);
+  assert.ok(bodies.every(body => JSON.stringify(body) === JSON.stringify(bodies[0])));
+  assert.equal(gateway.pendingOwnedRequest, null);
+  await gateway.createOwnedSession(args);
+  assert.notEqual(bodies.at(-1).request_id, bodies[0].request_id);
+});
+
+test('first device sign-in shows the chosen relay and reuses the original creation after approval', async () => {
+  const ids = [], target = 'live:' + 'ab'.repeat(16);
+  const args = { destination:'alice@relay.example', terms:false, privacy:false };
+  const challenge = {status:'pending', verification_url:'https://relay.example/setup?code=ABCD-1234', user_code:'ABCD-1234'};
+  let pending = true;
+  const gateway = new Gateway({fetchImpl: async (_path, {body}) => {
+    const {request_id} = JSON.parse(body); ids.push(request_id);
+    return json(pending ? {request_id, authorization:challenge} : {request_id, session:target});
+  }});
+  gateway.setToken('pairing');
+  assert.equal(await gateway.createOwnedSession(args, (url, code) => {
+    assert.equal(url, challenge.verification_url); assert.equal(code, challenge.user_code); pending = false;
+  }), target);
+  assert.deepEqual(ids, [ids[0], ids[0]]);
+  pending = true; challenge.verification_url = 'https://other.example/setup?code=ABCD-1234';
+  await assert.rejects(gateway.createOwnedSession(args, () => assert.fail('foreign link shown')), {code:'invalid_device_authorization'});
+});
+
+test('replacing pairing while an owned request is in flight discards its receipt', async () => {
+  let respond;
+  const gateway = new Gateway({fetchImpl: async (_path, {body}) => new Promise(resolve => {
+    respond = () => resolve(json({request_id:JSON.parse(body).request_id, session:'live:' + 'ab'.repeat(16)}));
+  })});
+  gateway.setToken('original');
+  const received = gateway.createOwnedSession({destination:'alice@local', terms:false, privacy:false});
+  gateway.setToken('replacement'); respond();
+  await assert.rejects(received, {code:'pairing_changed'});
+  assert.equal(gateway.pendingOwnedRequest, null);
+});
+
+test('ending a session requires this pairing’s verified creation and an exact closed receipt', async () => {
+  const target = 'live:' + 'a1'.repeat(16), other = 'live:' + 'b2'.repeat(16), deletes = [];
+  let answer = () => { throw new Error('lost response'); };
+  const gateway = new Gateway({fetchImpl: async (path, init) => {
+    if (init.method === 'POST') return json({request_id:JSON.parse(init.body).request_id, session:target});
+    deletes.push(path); assert.equal(init.method, 'DELETE'); assert.equal(init.headers.Authorization, 'Bearer pair');
+    assert.equal(init.body, undefined); return answer();
+  }});
+  gateway.setToken('pair');
+  await assert.rejects(gateway.endOwnedSession(target), {code:'not_owned'});
+  await gateway.createOwnedSession({destination:'alice@local', terms:false, privacy:false});
+  await assert.rejects(gateway.endOwnedSession(other), {code:'not_owned'});
+  assert.equal(deletes.length, 0);
+  await assert.rejects(gateway.endOwnedSession(target), {effect:'may_have_occurred'});
+  assert.equal(gateway.ownedSessionStatus(target), 'unknown');
+  for (const value of [{session:other, status:'closed'}, {session:target, status:'closing'}, {}]) {
+    answer = () => json(value);
+    await assert.rejects(gateway.endOwnedSession(target), {effect:'may_have_occurred'});
+  }
+  answer = () => json({error:{code:'denied',effect:'none',message:'denied'}}, 403);
+  await assert.rejects(gateway.endOwnedSession(target), {status:403});
+  assert.equal(gateway.ownedSessionStatus(target), 'unknown');
+  answer = () => json({session:target, status:'closed'});
+  await gateway.endOwnedSession(target);
+  assert.equal(gateway.ownedSessionStatus(target), undefined);
+  await assert.rejects(gateway.endOwnedSession(target), {code:'not_owned'});
+  assert.deepEqual(deletes, Array(6).fill('/api/gui/v1/owned-sessions/' + encodeURIComponent(target)));
+});
+
+test('duplicate end and a late old-pairing receipt cannot affect a replacement’s session', async () => {
+  const target = 'live:' + 'ac'.repeat(16), args = {destination:'a@host', terms:false, privacy:false};
+  let release, deletes = 0;
+  const gateway = new Gateway({fetchImpl: async (_path, init) => {
+    if (init.method === 'POST') return json({request_id:JSON.parse(init.body).request_id, session:target});
+    deletes++;
+    return new Promise(resolve => { release = () => resolve(json({session:target, status:'closed'})); });
+  }});
+  gateway.setToken('first'); await gateway.createOwnedSession(args);
+  const closing = gateway.endOwnedSession(target);
+  assert.equal(gateway.ownedSessionStatus(target), 'closing');
+  await assert.rejects(gateway.endOwnedSession(target), {code:'pending'});
+  gateway.setToken('replacement');
+  await assert.rejects(gateway.endOwnedSession(target), {code:'not_owned'});
+  await gateway.createOwnedSession(args);
+  release(); await assert.rejects(closing, {code:'pairing_changed'});
+  assert.equal(deletes, 1); assert.equal(gateway.ownedSessionStatus(target), 'open');
+  gateway.clearToken(); await assert.rejects(gateway.endOwnedSession(target), {code:'not_owned'});
 });

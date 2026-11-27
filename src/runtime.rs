@@ -607,6 +607,32 @@ impl Runtime {
         pool.resize(total)
     }
 
+    pub(crate) fn prepare_worker_retirement(
+        &self,
+        slot: usize,
+    ) -> Result<(crate::worker::Retirement, Option<String>), String> {
+        let pool = self
+            .workers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or("this connection has no worker pool")?;
+        pool.prepare_retirement(slot)
+    }
+
+    pub(crate) fn force_worker_retirement(
+        &self,
+        target: &crate::worker::Retirement,
+    ) -> Result<(), String> {
+        let pool = self
+            .workers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or("this connection has no worker pool")?;
+        pool.force_retirement(target)
+    }
+
     /// Exact-runtime projection for a protected local frontend. This never uses
     /// the process-wide display cache or binds a remote worker manager.
     pub(crate) fn frontend_has_workers(&self) -> bool {

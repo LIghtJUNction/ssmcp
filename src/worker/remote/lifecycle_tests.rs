@@ -177,19 +177,255 @@ fn shrink_selects_offline_then_idle_and_never_discards_working_results() {
     assert!(queue.cancellation_requested(&lease));
     assert!(queue.retire_requested(&lease));
     let done = complete(current);
+    assert!(done.claim.pending_retirement(&queue, &working).is_none());
     let (result, duplicate) = remote.complete(&queue, &working, done.clone(), 6).unwrap();
     assert!(!duplicate);
     assert_eq!(result.output.as_deref(), Some("real result"));
     counts(&queue, (1, 0, 0, 0, 1));
-    let release = retirement(&remote, &queue, &working);
+    let release = done.claim.pending_retirement(&queue, &working).unwrap();
+    assert_eq!(retirement(&remote, &queue, &working), release);
+    assert!(done.claim.pending_retirement(&queue, &idle).is_none());
+    let mut old = done.claim.clone();
+    old.epoch += 1;
+    assert!(old.pending_retirement(&queue, &working).is_none());
     remote.release(&queue, &working, release, 7).unwrap();
     counts(&queue, (0, 0, 0, 0, 0));
+    assert!(done.claim.pending_retirement(&queue, &working).is_none());
     assert!(remote.complete(&queue, &working, done, 8).unwrap().1);
     assert_eq!(
         queue.result(&owner, &task.task_id).unwrap().status,
         TaskStatus::Completed
     );
     assert!(queue.is_manager(&owner, &client));
+}
+
+#[test]
+fn operator_prepare_keeps_idle_neighbors_when_target_is_working() {
+    let (queue, remote) = service(3);
+    remote
+        .claim(&queue, &actor("idle-one"), "register", 1)
+        .unwrap();
+    remote
+        .claim(&queue, &actor("idle-two"), "register", 1)
+        .unwrap();
+    let manager = actor("manager");
+    let worker = actor("busy-three");
+    queue
+        .submit(manager.clone(), "only-task", "work", (), 2)
+        .unwrap();
+    let original = claim(&remote, &queue, &worker, "claim");
+    assert_eq!(original.slot, 2);
+    let (ticket, _) = queue.prepare_retirement(original.slot).unwrap();
+    for altered in [
+        Retirement {
+            generation: "other-pool".into(),
+            ..ticket.clone()
+        },
+        Retirement {
+            slot: 0,
+            ..ticket.clone()
+        },
+        Retirement {
+            epoch: ticket.epoch + 1,
+            ..ticket.clone()
+        },
+    ] {
+        assert!(remote.force_retirement(&queue, &altered, 3).is_err());
+    }
+    remote.force_retirement(&queue, &ticket, 4).unwrap();
+    counts(&queue, (2, 2, 0, 0, 0));
+    assert_eq!(
+        queue.result(&manager, &original.task_id).unwrap().status,
+        TaskStatus::Unknown
+    );
+}
+
+#[test]
+fn operator_force_retires_only_the_selected_busy_station() {
+    let (queue, remote) = service(3);
+    let manager = actor("manager");
+    let workers = [actor("one"), actor("two"), actor("three")];
+    let mut claims = Vec::new();
+    for (i, worker) in workers.iter().enumerate() {
+        queue
+            .submit(manager.clone(), &format!("submit-{i}"), "work", (), 1)
+            .unwrap();
+        claims.push(claim(&remote, &queue, worker, "wait"));
+        assert_eq!(claims[i].slot, i);
+    }
+    let (ticket, task_id) = queue.prepare_retirement(2).unwrap();
+    assert_eq!(task_id.as_deref(), Some(claims[2].task_id.as_str()));
+    assert_eq!(
+        queue.prepare_retirement(2).unwrap(),
+        (ticket.clone(), task_id)
+    );
+    assert_eq!(queue.snapshot().desired_total, 2);
+    assert!(!queue.snapshot().slots[0].retire_requested);
+    assert!(!queue.snapshot().slots[1].retire_requested);
+    let mut forged = ticket.clone();
+    forged.id.push('x');
+    assert!(remote.force_retirement(&queue, &forged, 11).is_err());
+    let mut observer = queue.subscribe();
+    remote.force_retirement(&queue, &ticket, 12).unwrap();
+    assert!(observer.has_changed().unwrap());
+    observer.borrow_and_update();
+    remote.force_retirement(&queue, &ticket, 13).unwrap();
+    assert!(!observer.has_changed().unwrap());
+    let lost = queue.result(&manager, &claims[2].task_id).unwrap();
+    assert_eq!(lost.status, TaskStatus::Unknown);
+    assert!(!lost.replay_safe);
+    assert!(
+        remote
+            .complete(&queue, &workers[2], complete(claims[2].clone()), 14)
+            .is_err()
+    );
+    assert!(matches!(
+        remote.claim(&queue, &workers[2], "wait", 15).unwrap(),
+        Claimed::Released { .. }
+    ));
+    for i in 0..2 {
+        let (done, _) = remote
+            .complete(&queue, &workers[i], complete(claims[i].clone()), 16)
+            .unwrap();
+        assert_eq!(done.status, TaskStatus::Completed);
+    }
+    counts(&queue, (2, 2, 0, 0, 0));
+}
+
+#[test]
+fn operator_force_adopts_resize_ticket_and_respects_natural_release_and_reuse() {
+    let (queue, remote) = service(3);
+    let manager = actor("manager");
+    let workers = [actor("one"), actor("two"), actor("three")];
+    let mut claims = Vec::new();
+    for (i, worker) in workers.iter().enumerate() {
+        queue
+            .submit(manager.clone(), &format!("task-{i}"), "work", (), 1)
+            .unwrap();
+        claims.push(claim(&remote, &queue, worker, "wait"));
+    }
+    queue.resize(1).unwrap();
+    let (ticket, current) = queue.prepare_retirement(2).unwrap();
+    assert_eq!(current.as_deref(), Some(claims[2].task_id.as_str()));
+    assert_eq!(queue.snapshot().desired_total, 1);
+    let (other, _) = queue.prepare_retirement(1).unwrap();
+    assert_ne!(other, ticket);
+    assert!(queue.snapshot().slots[1].retire_requested);
+    let done = complete(claims[2].clone());
+    remote
+        .complete(&queue, &workers[2], done.clone(), 20)
+        .unwrap();
+    assert_eq!(queue.prepare_retirement(2).unwrap(), (ticket.clone(), None));
+    assert_eq!(retirement(&remote, &queue, &workers[2]), ticket);
+    remote
+        .release(&queue, &workers[2], ticket.clone(), 21)
+        .unwrap();
+    remote.force_retirement(&queue, &ticket, 22).unwrap();
+    assert_eq!(
+        queue.result(&manager, &claims[2].task_id).unwrap().status,
+        TaskStatus::Completed
+    );
+    assert!(remote.complete(&queue, &workers[2], done, 23).unwrap().1);
+    remote
+        .complete(&queue, &workers[1], complete(claims[1].clone()), 24)
+        .unwrap();
+    remote.release(&queue, &workers[1], other, 25).unwrap();
+    queue.resize(3).unwrap();
+    remote
+        .claim(&queue, &actor("replacement-one"), "register", 26)
+        .unwrap();
+    let replacement = actor("replacement-two");
+    queue
+        .submit(manager.clone(), "new-task", "new work", (), 27)
+        .unwrap();
+    let new_claim = claim(&remote, &queue, &replacement, "wait");
+    assert_eq!(new_claim.slot, ticket.slot);
+    assert!(new_claim.epoch > ticket.epoch);
+    assert!(remote.force_retirement(&queue, &ticket, 28).is_err());
+    assert!(remote.release(&queue, &replacement, ticket, 29).is_err());
+    remote
+        .complete(&queue, &replacement, complete(new_claim), 30)
+        .unwrap();
+}
+
+#[test]
+fn operator_preparation_blocks_a_different_task_until_confirmation() {
+    for busy in [false, true] {
+        let (queue, remote) = service(2);
+        let manager = actor("manager");
+        let worker = actor("selected");
+        let neighbor = actor("neighbor");
+        let original = if busy {
+            queue
+                .submit(manager.clone(), "first", "original", (), 1)
+                .unwrap();
+            Some(claim(&remote, &queue, &worker, "initial"))
+        } else {
+            assert!(matches!(
+                remote.claim(&queue, &worker, "initial", 1).unwrap(),
+                Claimed::Waiting
+            ));
+            None
+        };
+        let (ticket, shown_task) = queue.prepare_retirement(0).unwrap();
+        assert_eq!(
+            shown_task.as_deref(),
+            original.as_ref().map(|claim| claim.task_id.as_str())
+        );
+        let next = queue
+            .submit(manager.clone(), "next", "queued", (), 2)
+            .unwrap();
+        if let Some(original) = &original {
+            assert_eq!(claim(&remote, &queue, &worker, "initial"), *original);
+            assert!(matches!(
+                remote.claim(&queue, &worker, "different", 3).unwrap(),
+                Claimed::Waiting
+            ));
+            remote
+                .complete(&queue, &worker, complete(original.clone()), 4)
+                .unwrap();
+        }
+        assert_eq!(retirement(&remote, &queue, &worker), ticket);
+        assert_eq!(
+            queue.result(&manager, &next.task_id).unwrap().status,
+            TaskStatus::Queued
+        );
+        let other = claim(&remote, &queue, &neighbor, "take-next");
+        assert_eq!(other.task_id, next.task_id);
+        assert_ne!(other.slot, ticket.slot);
+        remote.force_retirement(&queue, &ticket, 5).unwrap();
+        if let Some(original) = original {
+            assert_eq!(
+                queue.result(&manager, &original.task_id).unwrap().status,
+                TaskStatus::Completed
+            );
+        }
+        let (result, _) = remote
+            .complete(&queue, &neighbor, complete(other), 6)
+            .unwrap();
+        assert_eq!(result.status, TaskStatus::Completed);
+    }
+}
+
+#[test]
+fn operator_force_after_completion_keeps_the_confirmed_result() {
+    let (queue, remote) = service(1);
+    let manager = actor("manager");
+    let worker = actor("worker");
+    queue
+        .submit(manager.clone(), "task", "work", (), 1)
+        .unwrap();
+    let original = claim(&remote, &queue, &worker, "claim");
+    let (ticket, _) = queue.prepare_retirement(0).unwrap();
+    let done = complete(original.clone());
+    remote.complete(&queue, &worker, done.clone(), 2).unwrap();
+    remote.force_retirement(&queue, &ticket, 3).unwrap();
+    assert_eq!(
+        queue.result(&manager, &original.task_id).unwrap().status,
+        TaskStatus::Completed
+    );
+    assert!(remote.complete(&queue, &worker, done, 4).unwrap().1);
+    counts(&queue, (0, 0, 0, 0, 0));
 }
 
 #[test]
@@ -461,13 +697,29 @@ fn tool_activity_matches_the_registered_participant_and_preserves_the_claim() {
     let work = claim(&remote, &queue, &quiet, "q");
     queue.set_member_activity(std::sync::Arc::new(
         [
-            ("busy".into(), (7, false)),
-            ("quiet".into(), (0, true)),
-            ("unregistered".into(), (11, false)),
+            ("busy", 7, false),
+            ("quiet", 0, true),
+            ("unregistered", 11, false),
         ]
-        .into(),
+        .into_iter()
+        .map(|(id, count, offline)| {
+            let mut calls = [0; 10];
+            calls[9] = count;
+            (
+                id.into(),
+                crate::wire::WorkerMemberActivity {
+                    agent_id: id.into(),
+                    tool_calls_10m: count,
+                    calls_per_minute: Some(calls),
+                    offline,
+                },
+            )
+        })
+        .collect(),
     ));
     let view = queue.snapshot();
+    assert_eq!(view.productivity.as_ref().unwrap().members, 2);
+    assert_eq!(view.productivity.as_ref().unwrap().calls_per_minute[9], 7);
     assert_eq!(view.slots[0].activity_status, Some("offline"));
     assert_eq!(view.slots[0].tool_calls_10m, Some(0));
     assert_eq!(view.slots[0].state, "working");

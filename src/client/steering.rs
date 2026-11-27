@@ -413,6 +413,14 @@ impl Manager {
         self.connected && self.chat_enabled()
     }
 
+    fn can_send(&self) -> bool {
+        self.queue_connected()
+            && self.supported
+            && self.ready
+            && !self.frozen
+            && !self.reload_requested
+    }
+
     fn snapshot(&self) -> Value {
         let session_id = self
             .disabled_chat_client_id
@@ -461,7 +469,7 @@ impl Manager {
         self.frontend_current(client_id)?;
         Ok(json!({"client_id":client_id,"connected":self.connected,
             "chat_enabled":self.chat_enabled(),"supported":self.supported,
-            "can_send":self.queue_connected() && self.supported && self.ready && !self.frozen && !self.reload_requested,
+            "can_send":self.can_send(),
             "reloading":self.frozen || self.reload_requested}))
     }
 
@@ -533,7 +541,7 @@ impl Manager {
         target: &str,
     ) -> Result<Value, String> {
         self.frontend_current(client_id)?;
-        if !self.queue_connected() || !self.supported || !self.ready || self.reload_requested {
+        if !self.can_send() {
             return Err("chat connection is not ready; no input was admitted".into());
         }
         if target != "next" && !self.agents.iter().any(|agent| agent.agent_id == target) {
@@ -1645,6 +1653,11 @@ fn bounded_error(error: &str) -> String {
 
 pub(super) fn snapshot() -> Value {
     with(|manager| manager.snapshot())
+}
+
+/// The embedded TUI can keep edits in its local outbox while reconnecting.
+pub(crate) fn frontend_chat_ready(client_id: &str) -> bool {
+    with(|manager| manager.frontend_current(client_id).is_ok() && manager.can_send())
 }
 
 pub(crate) fn frontend_metadata(client_id: &str) -> Result<Value, String> {

@@ -18,6 +18,10 @@ use axum::{
 use std::{path::Path as FsPath, sync::Arc};
 
 impl Portal {
+    pub(crate) fn commerce_enabled(&self) -> bool {
+        self.commerce.is_some()
+    }
+
     /// Configure only on the broker that owns the durable account/quota store.
     pub fn configure_commerce(
         &mut self,

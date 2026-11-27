@@ -751,7 +751,7 @@ def main():
         parser.error(f"missing {decoder}; build the existing vt_snapshot example first")
     started = time.monotonic()
     report = {"status": "failed", "platform": platform.system(),
-        "transport": "production Broker/router fixture + account HTTP/WS + owned physical PTY + independent vt100 decoder",
+        "transport": "production Broker/router fixture + account HTTPS/WSS + owned physical PTY + independent vt100 decoder",
         "oauth": "real discovery/DCR/PKCE/consent with a synthetic upstream GitHub provider",
         "tls_verified": False, "real_github_account": False, "models_started": False,
         "scope": "real dashboard behavior; no installed coding harness or model is invoked",
@@ -776,7 +776,7 @@ def main():
         finally:
             harness.close_frontends()
             harness.cleanup()
-            report.update(checks=harness.checks, metrics=harness.metrics,
+            report.update(tls_verified=harness.account_gateway.tls_verified, checks=harness.checks, metrics=harness.metrics,
                           duration_seconds=round(time.monotonic() - started, 3))
             if args.report:
                 args.report.parent.mkdir(parents=True, exist_ok=True)

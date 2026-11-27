@@ -61,7 +61,7 @@ ssmcp-frontend --socket /absolute/private-directory/render.sock
 
 [定向测试](../src/portal/frontend/tests.rs)覆盖公共请求白名单、私有路径/竞争进程、正常 IPC、超时与超大响应、内容哈希、敏感 HTTP header 不转发，以及真实 worker 替换。
 
-真实替换回归保持一个核心 HTTP 服务和一条匿名设备 WebSocket，使用私有账户及正常测试授权绑定。启动第一个 worker 后停止它，再启动第二个 worker；前后验证同一设备连接仍能 Ping/Pong、同一会话对象仍在线、原 OAuth AT 仍被核心接受，授权快照没有被前端操作改写。设置 `SSMCP_FRONTEND_TEST_BINARY` 可明确运行刚构建的独立 ELF；没有设置时使用同样生产 serve 函数的私有测试进程入口。
+真实替换回归保持一个核心 HTTP 服务和一条已验证的设备 WebSocket，使用私有账户及正常测试授权绑定。启动第一个 worker 后停止它，再启动第二个 worker；前后验证同一设备连接仍能 Ping/Pong、同一会话对象仍在线、原 OAuth AT 仍被核心接受，授权快照没有被前端操作改写。设置 `SSMCP_FRONTEND_TEST_BINARY` 可明确运行刚构建的独立 ELF；没有设置时使用同样生产 serve 函数的私有测试进程入口。
 
 ```sh
 cargo build --locked --offline --bin ssmcp-frontend

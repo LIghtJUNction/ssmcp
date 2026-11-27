@@ -5,7 +5,8 @@ use ring::signature::Ed25519KeyPair;
 use std::sync::atomic::Ordering;
 
 async fn open(f: &Fixture, targets: &[&str]) -> (Socket, Arc<Session>) {
-    let mut req = f.request(None, true);
+    let token = f.token("123").await;
+    let mut req = f.request(Some(&token), true);
     req.headers_mut().insert(OFFER_HEADER, "1".parse().unwrap());
     let (mut socket, _) = tokio_tungstenite::connect_async(req).await.unwrap();
     send(&mut socket, legacy_self_hello(names(targets))).await;
@@ -25,7 +26,7 @@ async fn open(f: &Fixture, targets: &[&str]) -> (Socket, Arc<Session>) {
         .client(IDENTITY_RESOURCE, &alice(), &client_id)
         .await
         .unwrap();
-    assert!(session.owner_identity.is_none());
+    assert_eq!(session.owner_subject.as_deref(), Some("123"));
     assert!(session.info.routing.is_none());
     (socket, session)
 }

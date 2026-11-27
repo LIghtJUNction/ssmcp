@@ -937,6 +937,7 @@ def main():
                 report["error"] = f"{type(error).__name__}: {error}"
             finally:
                 harness.finish()
+                report["tls_verified"] = harness.account_gateway.tls_verified
                 report["checks"] = harness.checks
                 report["exec_dispatches"] = harness.exec_dispatches
                 report["http_requests"] = harness.http_requests

@@ -18,7 +18,14 @@ try {
   await new Promise((resolve, reject) => { server.stdout.once('data', resolve); server.once('error', reject); server.once('exit', code => reject(new Error(`Static server exited: ${code}`))); });
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
-  const foreground = 'live:' + '71'.repeat(32);
+  const foreground = 'live:' + '71'.repeat(16);
+  let newCount = 0, activeTarget = foreground, cwd = '/fixture/project';
+  let connectionGate;
+  const created = [], owned = new Map();
+  let dropFirstReceipt = true;
+  const endedTargets = [];
+  let reportFirstEnd;
+  const firstEnd = new Promise(resolve => { reportFirstEnd = resolve; });
   const errors = [], commands = [], requests = [], pending = [];
   let cursor = '9007199254740993', queue = [], failTerminal = false;
   page.on('pageerror', error => errors.push(error.message));
@@ -26,9 +33,16 @@ try {
     window.cspViolations = [];
     document.addEventListener('securitypolicyviolation', event => window.cspViolations.push(event.violatedDirective));
   });
-  const caps = capabilities({ resources: ['runtime', 'threads', 'conversation', 'chat.queue', 'terminals', 'workers'], commands: ['chat.send', 'terminal.write', 'terminal.resize', 'workers.resize'] });
+  const caps = capabilities({ resources: ['runtime', 'threads', 'conversation', 'chat.queue', 'terminals', 'workers'], commands: ['session.new', 'session.cd', 'chat.send', 'terminal.write', 'terminal.resize', 'workers.resize', 'client.update'] });
+  let activeCaps = caps, workbenchRefusal;
   const source = { kind: 'main', client_id: 'real.fixture.client', connection: '9007199254740993', request_id: '12' };
-  const worker = { slot: 0, epoch: '4', state: 'working', task_id: 'fixture.actual.task', task_summary: '核对原生工作状态', progress: '正在读取 fixture', registered: true, total_work_ms: '42000', current_task_elapsed_ms: '3000', logs_omitted: true };
+  const productivity = {
+    members: 1,
+    calls_per_minute: ['0', '0', '0', '1', '0', '0', '0', '0', '0', '0'],
+    plot: ['       1 |      *', '         |     | |', '         |     | |',
+      '       0 |*-*-*| |*-*-*-*-*-*', '         + -10m -------- now'],
+  };
+  const worker = { slot: 0, epoch: '4', state: 'working', quiet_10m: true, retire_requested: true, task_id: 'fixture.actual.task', task_summary: '核对原生工作状态', progress: '正在读取 fixture', registered: true, total_work_ms: '42000', current_task_elapsed_ms: '3000', logs_omitted: true };
   const inputCases = [
     { origin: 'human', text: '用户要求：检查多行输入\n@fixture-missing.txt $fixture_skill /reload' },
     { origin: 'system_hook', text: '系统提示：继续当前任务' },
@@ -45,31 +59,57 @@ try {
       message_id: item.id, input_origin: item.origin, completion_permission: false },
   }));
   const states = resource => ({
-    runtime: { backend_active: true, backend_generation: '2', live_cursor: cursor, retention: 'live_process_memory' },
+    runtime: { cwd, backend_active: true, backend_generation: '2', live_cursor: cursor, retention: 'live_process_memory' },
     threads: { client_id: 'fixture.client', connected: true, chat_enabled: true, can_send: true, reloading: false, agents: [{ agent_id: 'actual.agent', name: '主协调者', role: 'main', status: 'working' }], next_offset: 1, has_more: false },
-    conversation: { schema_version: 1, scope: { kind: 'process' }, events: [...inputHistory, { sequence: '9007199254740992', kind: 'answer', text: '来自原生历史的 fixture 文本', source, value: { type: 'ssmcp.message', kind: 'answer', message_id: 'native_00000000000000000000000000000006' } }], next_cursor: '9007199254740993', start_cursor: '9007199254740987', end_cursor: '9007199254740993', has_more: false, gap: false, retention: 'live_process_memory' },
+    conversation: { schema_version: 1, scope: { kind: 'process' }, events: activeTarget !== foreground ? [] : [...inputHistory, { sequence: '9007199254740992', kind: 'answer', text: '来自原生历史的 fixture 文本', source, value: { type: 'ssmcp.message', kind: 'answer', message_id: 'native_00000000000000000000000000000006' } }], next_cursor: '9007199254740993', start_cursor: '9007199254740987', end_cursor: '9007199254740993', has_more: false, gap: false, retention: 'live_process_memory' },
     'chat.queue': { client_id: 'fixture.client', items: queue, next_offset: queue.length, has_more: false },
     terminals: { terminals: [{ terminal_id: 'actual.terminal', name: '主终端', cwd: '/fixture/project', selected: true }], selected: 'actual.terminal', default_terminal_id: 'actual.terminal', max_terminals: 4 },
-    workers: { pool_generation: 'actual.pool', total: 1, desired_total: 1, registered_workers: 1, working: 1, idle: 0, offline: 0, retiring: 0, queued: 0, slots: [worker], slot_count: 1, offset: 0, next_offset: null },
+    workers: { pool_generation: 'actual.pool', total: 2, desired_total: 2, registered_workers: 2, working: 1, idle: 1, dreaming: 1, offline: 0, retiring: 0, queued: 0, productivity, slots: [worker,
+      { slot: 1, epoch: '4', state: 'idle', display_state: 'dreaming', registered: true, total_work_ms: '0' }], slot_count: 2, offset: 0, next_offset: null },
   })[resource];
   const fulfill = (route, body) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
   await page.route('**/api/gui/v1/**', async route => {
     const req = route.request(); const url = new URL(req.url()); const body = req.postDataJSON();
     requests.push({ path: url.pathname, authorization: req.headers().authorization, body });
-    if (url.pathname.endsWith('/sessions')) return fulfill(route, { sessions: [{ name: '真实会话 fixture', cwd: '/fixture/project' }, { name: '真实会话 fixture', cwd: '/fixture/project', target: foreground, manager_active: true, manager_state: 'active', connection_state: 'connected', phase: 'active', generation: '2', stop_requested: false }], next_offset: 2, has_more: false });
-    if (url.pathname === '/api/gui/v1/connections') return fulfill(route, { status: 'connected', connection_id: 'fixture.connection', session: body.session, read_only: body.read_only, capabilities: response({ id: body.request_id, operation: { op: 'capabilities' } }, caps), duplicate: false });
+    if (url.pathname.startsWith('/api/gui/v1/owned-sessions/')) {
+      assert.equal(req.method(), 'DELETE');
+      const target = decodeURIComponent(url.pathname.split('/').at(-1));
+      endedTargets.push(target);
+      if (endedTargets.length === 1) return new Promise(done => {
+        reportFirstEnd(async () => { await route.abort('failed'); done(); });
+      });
+      return fulfill(route, {session:target, status:'closed'});
+    }
+    if (url.pathname.endsWith('/owned-sessions')) {
+      if (!owned.has(body.request_id)) {
+        newCount++;
+        owned.set(body.request_id, 'live:' + newCount.toString(16).padStart(32, '0'));
+      }
+      if (dropFirstReceipt) { dropFirstReceipt = false; return route.abort('failed'); }
+      return fulfill(route, { request_id: body.request_id, session: owned.get(body.request_id) });
+    }
+    if (url.pathname.endsWith('/sessions')) return fulfill(route, { sessions: [{ name: '真实会话 fixture', cwd: '/fixture/project' }, { name: '真实会话 fixture', cwd: '/fixture/project', target: foreground, manager_active: true, manager_state: 'active', connection_state: 'connected', phase: 'active', generation: '2', stop_requested: false }, ...created], next_offset: 2 + created.length, has_more: false });
+    if (url.pathname === '/api/gui/v1/connections') {
+      if (connectionGate) await connectionGate;
+      activeTarget = body.session; activeCaps = body.read_only ? { ...caps, mode: 'observe', commands: [] } : caps; return fulfill(route, { status: 'connected', connection_id: 'fixture.connection', session: body.session, read_only: body.read_only, capabilities: response({ id: body.request_id, operation: { op: 'capabilities' } }, activeCaps), duplicate: false }); }
     if (url.pathname.endsWith('/bridge')) {
       const op = body.operation;
-      if (op.op === 'capabilities') return fulfill(route, response(body, caps));
+      if (op.op === 'capabilities') return fulfill(route, response(body, activeCaps));
       if (op.op === 'state') return fulfill(route, response(body, { resource: op.resource, schema_version: 1, value: states(op.resource) }));
       if (op.op === 'command') {
         commands.push(body);
+        if (op.command === 'chat.send' && workbenchRefusal) {
+          return route.fulfill({status:workbenchRefusal.status, contentType:'application/json', body:JSON.stringify({error:workbenchRefusal.error})});
+        }
         if (op.command === 'terminal.write' && failTerminal) return route.abort('failed');
         let value = { received: true };
         if (op.command === 'chat.send') {
           value = { request_id: body.id, message_id: 'fixture.message', status: 'sending', target: op.arguments.target, duplicate: false, confirmation: 'local_queue_admission' };
           queue = [{ id: value.message_id, text: op.arguments.text, target: value.target, status: value.status, created_at_ms: '9007199254740993', updated_at_ms: '9007199254740993', uncertain: false, retarget_required: false, error: null }];
         }
+        assert.notEqual(op.command, 'session.new');
+        if (op.command === 'session.cd') { cwd = op.arguments.path; value = {cwd}; }
+        if (op.command === 'client.update') value = { ok: true, summary: 'Fixture update check complete', details: 'Shared backend receipt' };
         if (op.command === 'workers.resize') value = { resize_pending: true, desired_total: op.arguments.total, pool_generation: 'actual.pool' };
         return fulfill(route, response(body, { command: op.command, value }));
       }
@@ -91,27 +131,16 @@ try {
     await fulfill(item.route, observation(item.request, eventPage({ start: '9007199254740992', next: cursor, events })));
     item.resolve();
   }
-  const initial = await page.goto(`http://127.0.0.1:${port}`);
+  const token = '9a'.repeat(32);
+  // A legacy explicit observation link can open the directory on a separate user gesture.
+  const initial = await page.goto(`http://127.0.0.1:${port}/?session=${foreground}#${token}`);
   assert.match(initial.headers()['content-security-policy'], /script-src 'self'/);
   assert.equal(initial.headers()['content-security-policy'].includes('unsafe-inline'), false);
-  await page.locator('#welcome-connect').click();
-  const token = '9a'.repeat(32);
-  const pairing = url => ({ name: 'pairing.json', mimeType: 'application/json',
-    buffer: Buffer.from(JSON.stringify({ schema: 'ssmcp-gui-pairing-v1', url, token })) });
-  await page.locator('#pairing-file').setInputFiles(pairing('https://other.example'));
-  await page.locator('#authenticate').click();
-  await page.getByText('配对文件与当前网页地址不一致，请打开对应网关的网页。', { exact: true }).waitFor();
-  assert.equal(requests.length, 0, 'mismatched pairing must not contact the API');
-  await page.locator('#pairing-file').setInputFiles(pairing(new URL(page.url()).origin));
-  await page.locator('#authenticate').click();
-  await page.waitForFunction(() => !document.querySelector('#auth-dialog').open);
-  assert.equal(await page.locator('#pairing-file').inputValue(), '');
-  // Traditional token entry still works in the same tab.
-  await page.locator('#auth-button').click();
-  await page.locator('#pairing-token').fill(token);
-  await page.locator('#authenticate').click();
-  await page.waitForFunction(() => !document.querySelector('#auth-dialog').open);
+  await page.locator('#launch-form').waitFor();
+  assert.equal(requests.length, 0);
+  await page.locator('#launch-back').click();
   const sessionRows = page.locator('.session-item');
+  await sessionRows.first().waitFor();
   assert.deepEqual(await sessionRows.locator('strong').allTextContents(), ['真实会话 fixture', '真实会话 fixture']);
   await sessionRows.nth(0).click();
   assert.equal(await sessionRows.nth(0).getAttribute('aria-current'), 'true');
@@ -126,7 +155,7 @@ try {
   assert.equal(await sessionRows.nth(0).getAttribute('aria-current'), 'false');
   assert.equal(await sessionRows.nth(1).getAttribute('aria-current'), 'true');
   assert.equal(commands.length, 0, 'connection/state reads must not dispatch commands');
-  assert.equal(await page.locator('#pairing-token').inputValue(), '');
+  assert.equal(await page.locator('input[type=password], input[type=file]').count(), 0);
   assert.deepEqual(await page.evaluate(() => [localStorage.length, sessionStorage.length]), [0, 0]);
 
   async function viewport(width, height) {
@@ -198,6 +227,38 @@ try {
   await viewport(1365, 900);
   await page.locator('#timeline-scroller').evaluate(node => { node.scrollTop = node.scrollHeight; });
   await page.locator('#chat-text').fill('');
+  const chatDraft = page.locator('#chat-text'), slashMenu = page.getByRole('listbox', { name: '斜杠命令' });
+  await chatDraft.fill('/');
+  assert.deepEqual(await slashMenu.getByRole('option').locator('code').allTextContents(), ['/new', '/cd']);
+  await chatDraft.press('ArrowDown');
+  assert.equal(await slashMenu.getByRole('option', {selected:true}).locator('code').textContent(), '/cd');
+  await chatDraft.press('ArrowUp');
+  await chatDraft.press('Enter');
+  assert.equal(await chatDraft.inputValue(), '/new');
+  assert.equal(await slashMenu.isVisible(), false);
+  assert.equal(await page.locator('#launch-setup').isVisible(), false, 'completion must not execute /new');
+  await chatDraft.fill('/c');
+  assert.equal(await slashMenu.getByRole('option').count(), 1);
+  await chatDraft.press('Tab');
+  assert.equal(await chatDraft.inputValue(), '/cd ');
+  assert.equal(await chatDraft.evaluate(node => node === document.activeElement && node.selectionStart === 4), true);
+  await chatDraft.fill('/c');
+  await chatDraft.press('Escape');
+  await emit('斜杠草稿刷新'); await page.getByText('斜杠草稿刷新', {exact:true}).waitFor();
+  assert.equal(await slashMenu.isVisible(), false);
+  assert.equal(await chatDraft.inputValue(), '/c');
+  await chatDraft.fill('/unrecognized');
+  assert.equal(await slashMenu.isVisible(), false);
+  await chatDraft.press('Enter');
+  assert.equal(await chatDraft.inputValue(), '/unrecognized\n', 'ordinary Enter still inserts a line break');
+  await chatDraft.fill('/n');
+  await chatDraft.dispatchEvent('compositionstart');
+  assert.equal(await slashMenu.isVisible(), false);
+  await chatDraft.press('Control+Enter');
+  assert.equal(await chatDraft.inputValue(), '/n');
+  await chatDraft.dispatchEvent('compositionend');
+  assert.equal(await slashMenu.getByRole('option').count(), 1);
+  assert.equal(commands.length, 0, 'choosing, dismissing and composing never dispatch');
   const draft = '中文输入法草稿，仍在组合';
   await page.locator('#chat-text').fill(draft); await page.locator('#chat-text').focus();
   await page.locator('#chat-text').evaluate(node => { node.setSelectionRange(4, 4); node.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true, data: '中' })); });
@@ -222,6 +283,16 @@ try {
   assert.equal(commands.some(item => item.operation.command !== 'chat.send'), false,
     'quoted @/$/slash text remains in an ordinary chat.send payload');
 
+  // Scrolling to the bottom of a retained page does not select the latest page.
+  // Enter that state deliberately, then follow the same action as a reader.
+  await viewport(1365, 650);
+  await page.locator('#timeline-scroller').evaluate(node => { node.scrollTop = 0; });
+  await emit('返回最新页的定位事件');
+  await page.waitForFunction(expected => document.getElementById('status-cursor').textContent === `cursor ${expected}`
+    && !document.getElementById('timeline-newer').disabled, cursor);
+  assert.equal(await page.getByText('返回最新页的定位事件', { exact: true }).count(), 0);
+  await page.locator('#new-events').click();
+  await page.getByText('返回最新页的定位事件', { exact: true }).waitFor();
   for (let pageIndex = 0; pageIndex < 3; pageIndex += 1) {
     await emit(`滚动检查 ${pageIndex}`, 16);
     await page.getByText(`滚动检查 ${pageIndex} 15`, { exact: true }).waitFor();
@@ -241,23 +312,253 @@ try {
   await page.getByText('结果未确定。请在操作记录中核对原请求 ID；页面不会自动重发。', { exact: true }).waitFor();
   assert.equal(await page.locator('#terminal-input').inputValue(), 'echo retained');
   assert.equal(commands.filter(item => item.operation.command === 'terminal.write').length, 1);
+  const settingsTrigger = page.getByRole('button', { name: '连接与设置', exact: true });
+  const settingsDialog = page.getByRole('dialog', { name: '连接与设置', exact: true });
+  assert.equal(await page.locator('#observation-status').isVisible(), true);
+  assert.equal(await page.locator('#refresh-state').isVisible(), false);
+  await settingsTrigger.focus();
+  await page.keyboard.press('Enter');
+  await settingsDialog.waitFor();
+  const networkTab = settingsDialog.getByRole('tab', { name: '连接', exact: true });
+  assert.equal(await networkTab.evaluate(el => el === document.activeElement), true);
+  await page.keyboard.press('ArrowRight');
+  assert.equal(await settingsDialog.getByRole('tab', { name: '对话' }).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('#chat-target').isVisible(), true);
+  await page.keyboard.press('End');
+  assert.equal(await settingsDialog.getByRole('link', { name: 'GitHub' }).isVisible(), true);
+  await page.keyboard.press('Home');
   await page.locator('#refresh-state').click();
+  await page.keyboard.press('Escape');
+  assert.equal(await settingsTrigger.evaluate(el => el === document.activeElement), true);
+  assert.equal(await page.locator('#terminal-input').inputValue(), 'echo retained');
   assert.equal(commands.filter(item => item.operation.command === 'terminal.write').length, 1);
+
+  await page.locator('#tab-workers').click();
+  assert.equal(await page.locator('#worker-productivity').textContent(), productivity.plot.join('\n'));
+  assert.equal(await page.locator('#worker-summary .metric').first().textContent(), '1工作中');
+  assert.equal(await page.locator('#worker-summary .metric').filter({ hasText: 'Dreaming' }).textContent(), '1Dreaming');
+  assert.equal(await page.locator('#worker-peak').textContent(), '峰值 1');
+  const trendPoints = await page.locator('#worker-trend-line').evaluate(line =>
+    Array.from(line.points, point => point.y));
+  assert.deepEqual(trendPoints, [38, 38, 38, 4, 38, 38, 38, 38, 38, 38]);
+  const workingCard = page.locator('#worker-list .worker-card').first();
+  assert.equal(await workingCard.locator('h3').textContent(), '站点 #01');
+  assert.deepEqual(await workingCard.locator('.pill').allTextContents(), ['working', '10 分钟无工具调用', '已请求退役']);
+  assert.equal(await page.locator('#worker-list .worker-card').nth(1).locator('.pill').textContent(), '☾ Dreaming');
+  await settingsTrigger.click();
+  await settingsDialog.getByRole('tab', { name: '通用' }).click();
+  await page.locator('#update-button').click();
+  await page.getByRole('button', { name: '检查更新' }).click();
+  await page.getByText('Fixture update check complete', { exact: false }).waitFor();
+  assert.deepEqual(commands.filter(item => item.operation.command === 'client.update').map(item => item.operation.arguments), [{ check: true }]);
+  await page.locator('[data-close="details-dialog"]').click();
+  await settingsDialog.getByRole('button', { name: '关闭设置' }).click();
+  const metricsBox = await page.locator('#worker-summary').boundingBox();
+  const plotBox = await page.locator('.worker-productivity').boundingBox();
+  assert.ok(plotBox.x >= metricsBox.x + metricsBox.width);
+  if (process.env.WEB_TEST_EVIDENCE) {
+    await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'workers-desktop.png') });
+  }
 
   for (const width of [390, 320]) {
     await viewport(width, 844);
-    for (const tab of ['conversation', 'terminal', 'workers']) {
+    await page.locator('#menu-button').click();
+    const drawer = page.locator('#sidebar');
+    assert.equal(await settingsDialog.isVisible(), false);
+    assert.equal(await page.locator('#close-menu').evaluate(el => el === document.activeElement), true);
+    assert.equal(await drawer.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+    assert.ok((await drawer.locator('[aria-selected="true"]').boundingBox()).height >= 44);
+    const triggerBox = await settingsTrigger.boundingBox();
+    const statusBox = await page.locator('#observation-status').boundingBox();
+    assert.ok(triggerBox.height >= 44 && statusBox.y >= triggerBox.y && statusBox.y < triggerBox.y + triggerBox.height);
+    await settingsTrigger.click();
+    assert.ok(await page.locator('#diagnostics-button').isVisible());
+    const dialogBox = await settingsDialog.boundingBox();
+    assert.ok(dialogBox.x >= 0 && dialogBox.x + dialogBox.width <= width);
+    assert.equal(await settingsDialog.evaluate(el => el.scrollWidth <= el.clientWidth), true);
+    await page.locator('#diagnostics-button').click();
+    await page.locator('#details-dialog').waitFor();
+    await page.keyboard.press('Escape');
+    assert.equal(await settingsDialog.isVisible(), true);
+    assert.equal(await page.locator('#menu-button').getAttribute('aria-expanded'), 'true');
+    await page.mouse.click(2, 2);
+    await settingsDialog.waitFor({ state: 'hidden' });
+    assert.equal(await settingsTrigger.evaluate(el => el === document.activeElement), true);
+    await settingsTrigger.click();
+    await page.keyboard.press('Escape');
+    assert.equal(await settingsDialog.isVisible(), false);
+    assert.equal(await settingsTrigger.evaluate(el => el === document.activeElement), true);
+    await page.locator('#dismiss-sidebar').click({ position: { x: width - 8, y: 40 } });
+    assert.equal(await page.locator('#menu-button').evaluate(el => el === document.activeElement), true);
+    for (const tab of ['conversation', 'terminal', 'workers', 'waits']) {
+      await page.locator('#menu-button').click();
       await page.locator(`#tab-${tab}`).click();
+      if (tab === 'workers') {
+        const summary = await page.locator('#worker-summary').boundingBox();
+        const trend = await page.locator('.worker-productivity').boundingBox();
+        assert.ok(trend.y >= summary.y + summary.height);
+        if (width === 390 && process.env.WEB_TEST_EVIDENCE) {
+          await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'workers-mobile.png') });
+        }
+      }
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${tab} must fit ${width}px viewport`);
       const panel = await page.locator(`#panel-${tab}`).boundingBox();
       assert.ok(panel && panel.x >= 0 && panel.x + panel.width <= width + 1);
     }
   }
+  await page.locator('#menu-button').click();
   await page.locator('#tab-conversation').click();
   await page.locator('#menu-button').click();
   assert.equal(await page.locator('#menu-button').getAttribute('aria-expanded'), 'true');
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#menu-button').getAttribute('aria-expanded'), 'false');
+  // Exercise the shared chat surface under both system themes at a phone width.
+  await viewport(390, 844);
+  await chatDraft.fill('/');
+  for (const theme of ['light', 'dark']) {
+    await page.emulateMedia({colorScheme:theme});
+    await page.waitForFunction(value => document.documentElement.dataset.theme === value, theme);
+    const paint = await page.evaluate(() => {
+      const style = selector => getComputedStyle(document.querySelector(selector));
+      return [style('body').backgroundColor, style('#chat-form').borderTopColor,
+        style('#chat-send').backgroundColor, style('#slash-options [aria-selected=true]').backgroundColor,
+        style('#observation-status .good').backgroundColor, style('#launch-terms').accentColor,
+        getComputedStyle(document.body, '::selection').backgroundColor];
+    });
+    assert.equal(paint[0], theme === 'light' ? 'rgb(250, 250, 250)' : 'rgb(18, 18, 18)');
+    for (const color of paint) {
+      const channels = color.match(/\d+/g)?.map(Number);
+      assert.ok(channels?.length === 3 && channels.every(channel => channel === channels[0]), color);
+    }
+    if (process.env.WEB_TEST_EVIDENCE) await page.screenshot({path:join(process.env.WEB_TEST_EVIDENCE, 'slash-' + theme + '-mobile.png')});
+  }
+  await page.emulateMedia({colorScheme:'light'});
+  await viewport(320, 844);
+  // Complete a command in place with an actual touch. Preserve the existing path and caret.
+  await chatDraft.fill('/c   已有 路径');
+  await chatDraft.evaluate(node => node.setSelectionRange(2, 2));
+  const cdOption = slashMenu.getByRole('option', {name:'/cd 切换工作目录'});
+  const touchBox = await cdOption.boundingBox();
+  assert.ok(touchBox && touchBox.height >= 44);
+  const touch = await page.context().newCDPSession(page);
+  await touch.send('Emulation.setTouchEmulationEnabled', {enabled:true});
+  await touch.send('Input.dispatchTouchEvent', {type:'touchStart', touchPoints:[{x:touchBox.x + 20, y:touchBox.y + touchBox.height / 2}]});
+  await touch.send('Input.dispatchTouchEvent', {type:'touchEnd', touchPoints:[]});
+  await touch.send('Emulation.setTouchEmulationEnabled', {enabled:false});
+  await touch.detach();
+  await page.waitForFunction(() => document.querySelector('#chat-text').value === '/cd   已有 路径');
+  assert.equal(await chatDraft.evaluate(node => node === document.activeElement && node.selectionStart === 6), true);
+  assert.equal(commands.some(item => item.operation.command === 'session.cd'), false);
+  // A mobile hotkey is one native terminal write and does not submit the message draft.
+  failTerminal = false;
+  await page.locator('#chat-text').fill('留在原会话');
+  await page.locator('#terminal-keys [data-key="up"]').click();
+  await page.waitForFunction(() => !document.querySelector('#new-session').disabled);
+  for (let i=0; i<100 && !commands.some(item => item.operation.arguments.data === '\x1b[A'); i++) await delay(10);
+  assert.equal(commands.at(-1).operation.arguments.data, '\x1b[A');
+  assert.equal(await page.locator('#chat-text').inputValue(), '留在原会话');
+  await page.locator('#new-session').click();
+  await page.locator('#launch-name').fill('session1');
+  await page.locator('#launch-relay').fill('relay.example');
+  await page.locator('#launch-connect').click();
+  await page.getByText('创建结果未确定，请点“核对上次创建”重试原请求。').waitFor();
+  assert.equal(await page.locator('#launch-name').isDisabled(), true);
+  assert.equal(requests.filter(r => r.path.endsWith('/owned-sessions')).length, 1);
+  await page.locator('#launch-connect').click();
+  await page.locator('.session-tab[aria-selected="true"]').filter({hasText:'session1@relay.example'}).waitFor();
+  assert.equal(await page.locator('#chat-text').inputValue(), '');
+  const firstOwned = [...owned.values()][0];
+  const opens = () => requests.filter(r => r.path === '/api/gui/v1/connections' && r.body.session === firstOwned);
+  assert.deepEqual(opens().map(r => r.body.read_only), [true]);
+  await page.locator('#take-control').click();
+  await page.waitForFunction(() => document.querySelector('#take-control').hidden && !document.querySelector('#connected-actions').hidden);
+  assert.deepEqual(opens().map(r => r.body.read_only), [true, false]);
+  for (const [status,code,expected] of [
+    [402,'traffic_quota_exceeded','本月可用流量不足'],[409,'online_session_limit','已有 1 个在线会话'],
+  ]) {
+    workbenchRefusal = {status,error:{code,effect:'may_have_occurred',message:'service rejection',relay_origin:'https://relay.example'}};
+    await page.locator('#chat-text').fill('保留我的草稿');
+    await page.locator('#chat-send').click();
+    await page.waitForFunction(expected => document.querySelector('#error-text').textContent.includes(expected), expected);
+    const banner = page.locator('#error-banner');
+    assert.equal(await banner.getByRole('link').getAttribute('href'), 'https://relay.example/account/traffic');
+    assert.match(await banner.textContent(), /原会话及尚未收到回执的操作/);
+    assert.doesNotMatch(await banner.textContent(), /会话未创建/);
+    assert.equal(await page.locator('#chat-text').inputValue(), '保留我的草稿');
+  }
+  workbenchRefusal = null;
+  const chatsBeforeSlashCommands = commands.filter(item => item.operation.command === 'chat.send').length;
+  assert.equal(chatsBeforeSlashCommands, 4, 'two prior sends and two explicit attempts with unconfirmed receipts');
+  await page.locator('#chat-text').fill('/cd /fixture/目录 with space');
+  await page.locator('#chat-send').click();
+  await page.waitForFunction(() => document.querySelector('#session-cwd').textContent === '/fixture/目录 with space');
+  await page.locator('#chat-text').fill('/new');
+  await page.locator('#chat-send').click();
+  await page.locator('#launch-name').fill('session2');
+  await page.locator('#launch-relay').fill('relay.example');
+  await page.locator('#launch-connect').click();
+  await page.locator('.session-tab[aria-selected="true"]').filter({hasText:'session2@relay.example'}).waitFor();
+  assert.equal(newCount, 2);
+  await page.locator('.session-tab').first().click();
+  await page.waitForFunction(() => document.getElementById('chat-text').value === '留在原会话');
+  assert.equal(commands.filter(item => item.operation.command === 'chat.send').length, chatsBeforeSlashCommands);
+  if (process.env.WEB_TEST_EVIDENCE) {
+    await viewport(390, 844);
+    await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'session-mobile.png') });
+    await page.locator('#menu-button').click();
+    await page.screenshot({ path: join(process.env.WEB_TEST_EVIDENCE, 'session-mobile-sidebar.png') });
+    await page.locator('#close-menu').click();
+  }
+  await viewport(1365, 900);
+  assert.equal(await page.locator('#end-session').isVisible(), false, 'a manually attached CLI is never page-owned');
+  assert.equal(endedTargets.length, 0, 'switching tabs and disconnecting do not end sessions');
+  const firstTab = page.locator('.session-tab').filter({hasText:'session1@relay.example'});
+  await firstTab.click();
+  await page.locator('#end-session').click();
+  assert.equal(await page.locator('#end-session-target').textContent(), firstOwned);
+  await page.locator('#end-session-cancel').click();
+  assert.equal(endedTargets.length, 0);
+  await page.locator('#end-session').click(); await page.locator('#end-session-confirm').click();
+  const loseEndReply = await firstEnd;
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#end-session-dialog').evaluate(dialog => dialog.open), true);
+  assert.equal(await page.locator('#end-session-confirm').isDisabled(), true);
+  await loseEndReply();
+  await page.getByText(/结束结果未确定。可对上方同一会话重试/).waitFor();
+  assert.deepEqual(endedTargets, [firstOwned]);
+  await page.locator('#end-session-cancel').click();
+  await page.locator('.session-tab').first().click();
+  await page.locator('#end-session').waitFor({state:'hidden'});
+  let finishSwitch;
+  connectionGate = new Promise(resolve => { finishSwitch = resolve; });
+  await firstTab.click();
+  await settingsTrigger.click();
+  finishSwitch();
+  connectionGate = null;
+  await page.waitForFunction(target => {
+    const current = document.querySelector('.session-tab[aria-selected="true"]');
+    return current?.title === target && !current.disabled && !document.querySelector('#connected-actions').hidden;
+  }, firstOwned);
+  assert.equal(await settingsDialog.evaluate(dialog => dialog.open), true, 'a pending connection preserves newly opened settings');
+  await page.locator('#disconnect-button').click();
+  await settingsDialog.getByRole('button', { name: '关闭设置' }).click();
+  await page.waitForFunction(() => document.querySelector('#connected-actions').hidden);
+  assert.deepEqual(endedTargets, [firstOwned]);
+  await page.getByRole('button', {name:'重试结束此会话'}).click(); await page.locator('#end-session-confirm').click();
+  await page.waitForFunction(() => !document.querySelector('#end-session-dialog').open && document.querySelector('#end-session').hidden);
+  assert.equal(await firstTab.count(), 0);
+  assert.equal(await page.locator('.session-tab').count(), 2);
+  assert.equal(await page.locator('#connect-strip').isVisible(), false);
+  assert.deepEqual(endedTargets, [firstOwned, firstOwned]);
+  const secondTab = page.locator('.session-tab').filter({hasText:'session2@relay.example'});
+  await secondTab.click(); await page.locator('#end-session').click();
+  const secondOwned = [...owned.values()][1];
+  assert.equal(await page.locator('#end-session-target').textContent(), secondOwned);
+  await page.locator('#end-session-confirm').click();
+  await page.waitForFunction(() => !document.querySelector('#end-session-dialog').open && document.querySelector('#connected-actions').hidden);
+  assert.equal(await page.locator('.session-tab').count(), 1, 'only the manual CLI tab remains');
+  assert.equal(await page.locator('#chat-text').inputValue(), '');
+  assert.deepEqual(endedTargets, [firstOwned, firstOwned, secondOwned]);
   assert.deepEqual(errors, []);
   assert.deepEqual(await page.evaluate(() => window.cspViolations), []);
   assert.ok(requests.every(request => request.authorization === 'Bearer ' + token));
@@ -267,14 +568,21 @@ try {
   const moduleTab = await browser.newPage();
   const moduleHome = 'http://127.0.0.1:42387/';
   const bootstrapRequests = [];
-  let denyPairing = false;
+  let loginApproved = false;
+  const loginLink = 'https://relay.example/setup?code=ABCDE-FGHIJ';
+  const attemptIds = [];
   await moduleTab.route(moduleHome + '**', async route => {
-    const request = route.request();
-    const path = new URL(request.url()).pathname;
-    if (path === '/api/gui/v1/sessions') {
-      bootstrapRequests.push({ address: moduleTab.url(), auth: request.headers().authorization });
-      return route.fulfill({ status: denyPairing ? 401 : 200, contentType: 'application/json',
-        body: JSON.stringify(denyPairing ? {} : { sessions: [{ name: '模块会话' }], has_more: false }) });
+    const request = route.request(), path = new URL(request.url()).pathname;
+    if (path.startsWith('/api/')) {
+      bootstrapRequests.push(path);
+      assert.equal(path, '/api/gui/v1/owned-sessions'); assert.equal(request.method(), 'POST');
+      assert.equal(request.headers().authorization, 'Bearer ' + token);
+      const {request_id} = request.postDataJSON();
+      attemptIds.push(request_id);
+      if (!loginApproved) return route.fulfill({status:200, contentType:'application/json',
+        body:JSON.stringify({request_id, authorization:{status:'pending',verification_url:loginLink,user_code:'ABCDE-FGHIJ'}})});
+      return route.fulfill({status:503, contentType:'application/json',
+        body:JSON.stringify({error:{code:'unavailable',effect:'none',message:'缺少普通用户运行器。'}})});
     }
     const asset = await fetch('http://127.0.0.1:' + port + path);
     assert.equal(asset.status, 200, path);
@@ -282,18 +590,173 @@ try {
     return route.fulfill({ status: 200, contentType: asset.headers.get('content-type'),
       body: path === '/' ? source.replace('<html ', '<html data-ssmcp-magisk ') : source });
   });
-  await moduleTab.goto(moduleHome + '#' + token);
-  await moduleTab.waitForFunction(() => document.querySelector('#auth-status')?.textContent === '已设置认证', null, { timeout: 8000 });
-  assert.equal(await moduleTab.locator('.session-item strong').textContent(), '模块会话');
-  assert.deepEqual(bootstrapRequests, [{ address: moduleHome, auth: 'Bearer ' + token }]);
-  assert.deepEqual(await moduleTab.evaluate(() => [location.hash, localStorage.length, sessionStorage.length]), ['', 0, 0]);
-  denyPairing = true;
+  await moduleTab.goto(moduleHome);
+  await moduleTab.getByText(/Magisk 管理器.*执行操作/).waitFor();
+  assert.equal(await moduleTab.locator('#launch-setup').isVisible(), false);
+  assert.deepEqual(bootstrapRequests, []);
   await moduleTab.goto('about:blank');
   await moduleTab.goto(moduleHome + '#' + token);
-  await moduleTab.getByText('模块配对失败，请从模块管理器重新打开 SSMCP。', { exact: true }).waitFor();
+  await moduleTab.waitForFunction(() => document.querySelector('#auth-status')?.textContent === '已设置认证', null, { timeout: 8000 });
+  await moduleTab.locator('#launch-setup').waitFor();
+  assert.equal(await moduleTab.locator('#launch-connect').isVisible(), true);
+  assert.equal(await moduleTab.locator('#launch-back').isVisible(), false);
   assert.equal(moduleTab.url(), moduleHome);
-  assert.equal(await moduleTab.locator('#auth-status').textContent(), '尚未认证');
+  assert.deepEqual(bootstrapRequests, []);
+  await moduleTab.locator('#launch-name').fill('module');
+  await moduleTab.locator('#launch-relay').fill('relay.example');
+  await moduleTab.locator('#launch-connect').click();
+  await moduleTab.locator('#device-login-link').waitFor();
+  assert.equal(await moduleTab.locator('#device-login-link').getAttribute('href'), loginLink);
+  assert.equal(await moduleTab.locator('#device-login-code').textContent(), 'ABCDE-FGHIJ');
+  assert.equal(await moduleTab.locator('#workbench-shell').isVisible(), false);
+  loginApproved = true;
+  await moduleTab.getByText('缺少普通用户运行器。', {exact:true}).waitFor();
+  assert.ok(bootstrapRequests.length >= 2 && bootstrapRequests.every(path => path === '/api/gui/v1/owned-sessions'));
+  assert.equal(new Set(attemptIds).size, 1);
+  assert.equal(await moduleTab.locator('#device-login').isVisible(), false);
+  assert.equal(await moduleTab.locator('#workbench-shell').isVisible(), false);
   await moduleTab.close();
+  const mobile = await browser.newPage({
+    viewport:{width:320,height:640},
+    userAgent:'Mozilla/5.0 (Linux; Android 14; Fixture Build/TOY; wv) AppleWebKit/537.36 Version/4.0 Chrome/120.0 Mobile Safari/537.36'
+  });
+  let mobileApiCalls = 0;
+  await mobile.route('**/api/gui/v1/**', r => { mobileApiCalls++; return r.abort(); });
+  await mobile.goto(`http://127.0.0.1:${port}/`);
+  await mobile.locator('#entry-hint').getByText('请从设备上的 SSMCP 应用打开。').waitFor();
+  assert.equal(await mobile.locator('input[type=file], input[type=password]').count(), 0);
+  assert.equal(await mobile.locator('#launch-form').isVisible(), false);
+  assert.equal(await mobile.evaluate(() => document.documentElement.dataset.ssmcpPairingReady), '1');
+  await mobile.evaluate(token => new Promise(resolve => {
+    window.addEventListener('message', () => setTimeout(resolve, 0), {once:true});
+    window.postMessage(token, location.origin);
+  }), token);
+  await mobile.evaluate(token => window.dispatchEvent(new MessageEvent('message', {data:token,source:null})), token);
+  assert.equal(await mobile.locator('#launch-form').isVisible(), false);
+  assert.equal(mobileApiCalls, 0);
+  await mobile.close();
+  const setup = await browser.newPage({viewport:{width:390,height:844}});
+  const readResults = [];
+  let launchResult = { status: 200, json: { status: 'ready' } };
+  await setup.route('**/api/gui/v1/**', async route => {
+    const req = route.request();
+    readResults.push([req.method(), new URL(req.url()).pathname]);
+    assert.equal(req.headers().authorization, 'Bearer ' + token);
+    assert.equal(req.postData(), null);
+    await route.fulfill(launchResult);
+  });
+  const markedSetup = `http://127.0.0.1:${port}/?setup=1&launch_refused=1`;
+  await setup.goto(markedSetup);
+  await setup.locator('#entry-hint').waitFor();
+  assert.deepEqual(readResults, [], 'a URL flag cannot pair the page');
+  for (const [status, code, description] of [
+    [402, 'traffic_quota_exceeded', '本月可用流量不足'], [409, 'online_session_limit', '已有 1 个在线会话'],
+    [200, null, null],
+  ]) {
+    launchResult = code ? { status, json: { error: { code, message: 'Relay declined', effect: 'may_have_occurred',
+      relay_origin: 'https://saved-destination.example', recharge_url: 'https://unrelated.example/' } } }
+      : { status, json: { status: 'ready' } };
+    await setup.goto('about:blank');
+    const received = setup.waitForResponse(response => new URL(response.url()).pathname === '/api/gui/v1/launch');
+    await setup.goto(markedSetup + '#' + token);
+    await received;
+    if (description) {
+      await setup.locator('#launch-error').filter({ hasText: description }).waitFor();
+      assert.equal(await setup.locator('#launch-error a').getAttribute('href'), 'https://saved-destination.example/account/traffic');
+      assert.doesNotMatch(await setup.locator('#launch-error').textContent(), /未创建|unrelated/);
+    } else {
+      assert.equal(await setup.locator('#launch-error').textContent(), '');
+    }
+    assert.equal(setup.url(), markedSetup, 'paired fragment is scrubbed before the read');
+  }
+  assert.deepEqual(readResults, Array.from({ length: 3 }, () => ['GET', '/api/gui/v1/launch']));
+  await setup.unroute('**/api/gui/v1/**');
+  const starts = [];
+  await setup.route('**/api/gui/v1/**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    assert.equal(path, '/api/gui/v1/owned-sessions');
+    assert.equal(route.request().headers().authorization, 'Bearer ' + token);
+    const args = route.request().postDataJSON();
+    starts.push(args);
+    if (args.destination.endsWith('@ssmcp.lmm.best') && !(args.terms && args.privacy)) {
+      return route.fulfill({status:400, contentType:'application/json',
+        body:JSON.stringify({error:{code:'invalid_request', effect:'none', message:"confirm the hosted relay's terms and privacy policy"}})});
+    }
+    await route.fulfill({status:400, contentType:'application/json', body:JSON.stringify({error:{code:'denied', effect:'none', message:'测试账号未注册'}})});
+  });
+  await setup.goto(`http://127.0.0.1:${port}/?setup=1#${token}`);
+  await setup.locator('#launch-name').waitFor();
+  assert.equal(await setup.locator('#launch-relay').inputValue(), 'ssmcp.lmm.best');
+  assert.equal(starts.length, 0);
+  if (process.env.WEB_TEST_EVIDENCE) await setup.screenshot({path:join(process.env.WEB_TEST_EVIDENCE, 'first-connection-mobile.png')});
+  assert.deepEqual(await setup.locator('#launch-form input:visible').evaluateAll(inputs => inputs.map(input => input.id)), ['launch-name','launch-relay']);
+  assert.deepEqual(await setup.locator('#launch-form button:visible').allTextContents(), ['连接']);
+  assert.equal(await setup.locator('#launch-name').evaluate(e => e === document.activeElement), true);
+  await setup.setViewportSize({width:320,height:640});
+  assert.equal(await setup.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await setup.locator('#launch-name').fill('new-user');
+  await setup.locator('#launch-name').press('Enter');
+  await setup.locator('#launch-hosted').waitFor();
+  assert.equal(starts.length, 1);
+  assert.deepEqual([starts[0].terms,starts[0].privacy], [false,false]);
+  for (const id of ['launch-terms','launch-privacy']) assert.equal(await setup.locator('#'+id).isChecked(), false);
+  await setup.locator('#launch-terms').check(); await setup.locator('#launch-privacy').check();
+  await setup.locator('#launch-connect').click();
+  await setup.getByText('测试账号未注册').waitFor();
+  assert.deepEqual([starts[1].terms,starts[1].privacy], [true,true]);
+  await setup.locator('#launch-relay').fill('my.example');
+  assert.equal(await setup.locator('#launch-hosted').isVisible(), false);
+  await setup.locator('#launch-relay').press('Enter');
+  await setup.waitForFunction(() => !document.querySelector('#launch-connect').disabled);
+  assert.deepEqual(starts[2], {request_id:starts[2].request_id, destination:'new-user@my.example', terms:false, privacy:false});
+  const launchError = setup.locator('#launch-error');
+  const quota = {status:402, body:{error:{code:'traffic_quota_exceeded',effect:'none',
+    message:'https://wrong.example/pay', recharge_url:'https://wrong.example/pay'}}};
+  let refusal = quota;
+  let refusedCreates = 0;
+  await setup.route('**/api/gui/v1/owned-sessions', async route => {
+    refusedCreates++;
+    await route.fulfill({status:refusal.status, contentType:'application/json', body:JSON.stringify(refusal.body)});
+  });
+  await setup.locator('#launch-connect').click();
+  const accountLink = launchError.getByRole('link', {name:'查看本月流量与订单'});
+  await accountLink.waitFor();
+  assert.equal(await accountLink.getAttribute('href'), 'https://my.example/account/traffic');
+  assert.equal(await accountLink.getAttribute('rel'), 'noopener noreferrer');
+  assert.equal(await launchError.textContent().then(text => text.includes('wrong.example')), false);
+  const launchDraft = setup.locator('#launch-name');
+  assert.equal(await launchDraft.inputValue(), 'new-user');
+  await setup.evaluate(() => Object.defineProperty(navigator, 'clipboard', {configurable:true, value:{
+    writeText: async () => { throw new Error('clipboard disabled in embedded browser'); },
+  }}));
+  await launchError.getByRole('button', {name:'复制账户地址'}).click();
+  const manualCopy = launchError.getByRole('textbox');
+  assert.equal(await manualCopy.inputValue(), 'https://my.example/account/traffic');
+  assert.equal(await manualCopy.evaluate(input => input === document.activeElement
+    && input.selectionEnd - input.selectionStart === input.value.length), true);
+  assert.equal(await setup.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  for (const [status, code, reason, expected] of [
+    [401, 'denied', 'gateway pairing is required', '本机网关需要重新配对'],
+    [403, 'denied', 'attach lease expired', '控制授权已失效'],
+    [429, 'unavailable', 'gateway request capacity reached', '请求过多'],
+    [503, 'unavailable', '缺少普通用户运行器。', '缺少普通用户运行器'],
+  ]) {
+    refusal = {status,body:{error:{code,effect:'none',message:reason}}};
+    await setup.locator('#launch-connect').click();
+    await setup.waitForFunction(expected => document.getElementById('launch-error').textContent.includes(expected), expected);
+    assert.equal(await launchError.getByRole('link').count(), 0);
+    assert.equal(await launchDraft.inputValue(), 'new-user');
+    assert.equal(await setup.locator('#launch-relay').inputValue(), 'my.example');
+  }
+  refusal = {status:409,body:{error:{code:'online_session_limit',effect:'none',message:'one online session',relay_origin:'https://my.example'}}};
+  await setup.locator('#launch-connect').click();
+  await launchError.getByRole('link').waitFor();
+  assert.match(await launchError.textContent(), /已有 1 个在线会话/);
+  assert.match(await launchError.textContent(), /结束先前在线的会话/);
+  assert.match(await launchError.textContent(), /本次会话未创建/);
+  assert.doesNotMatch(await launchError.textContent(), /流量不足/);
+  assert.equal(refusedCreates, 6);
+  await setup.close();
   process.stdout.write('Browser fixture smoke passed: CSP, protocol envelopes, IME/focus, bounded DOM, scroll continuity, queue receipt, five right-aligned input origins, original-ID quote button/selected excerpt/R shortcut, preserved multiline draft and ordinary quoted delivery, unknown command, mobile panels.\n');
 } finally {
   if (browser) await browser.close();

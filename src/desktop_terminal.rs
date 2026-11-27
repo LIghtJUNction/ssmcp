@@ -4,30 +4,7 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 
 pub use crate::client::terminal::Replies as TerminalReplies;
 
-pub fn validate_destination(destination: &str) -> Result<(), String> {
-    let (user, server) = destination.split_once('@').ok_or_else(|| {
-        if destination.is_empty() {
-            "请输入用户名和服务器域名。"
-        } else {
-            "用户名后需要 @ 和服务器域名。"
-        }
-        .to_owned()
-    })?;
-    crate::username::normalize(user).map_err(|error| {
-        if error.contains("reserved") {
-            "这个用户名由服务器保留，请使用你的账户名。"
-        } else {
-            "用户名需为 3–32 个字符，以字母开头，以字母或数字结尾，可含 _ 和 -。"
-        }
-        .to_owned()
-    })?;
-    if server.is_empty() {
-        return Err("请填写服务器域名，或选择默认中继。".into());
-    }
-    crate::server_endpoint::parse_target(destination)
-        .map(|_| ())
-        .map_err(|_| "服务器地址无效，请检查域名和端口，例如 ssmcp.lmm.best。".into())
-}
+pub use crate::connection_form::validate_destination;
 
 pub fn launch(
     executable: &Path,

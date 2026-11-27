@@ -187,7 +187,9 @@ pub(super) fn connection_arguments(
     options: &super::Options,
     saved_session: bool,
 ) -> crate::Result<Vec<OsString>> {
-    if saved_session {
+    if saved_session || arguments.first().is_some_and(|arg| arg == "__frontend-run") {
+        // The window-owned runner already has a literal username@server and a
+        // private instance. It must re-open its pipe lease on process restart.
         return Ok(arguments);
     }
     let mut pinned = if options.is_local() {
@@ -198,19 +200,18 @@ pub(super) fn connection_arguments(
         };
         vec![OsString::from(command)]
     } else {
-        vec![
-            OsString::from("--server"),
-            OsString::from(
-                options
-                    .server
-                    .as_deref()
-                    .ok_or("reload requires a resolved relay server")?,
-            ),
-        ]
+        let server = options
+            .server
+            .as_deref()
+            .ok_or("reload requires a resolved relay server")?;
+        let username = options
+            .username
+            .as_deref()
+            .ok_or("reload requires an explicit relay username")?;
+        vec![OsString::from(crate::server_endpoint::allow_principal(
+            username, server,
+        )?)]
     };
-    if let Some(username) = &options.username {
-        pinned.extend([OsString::from("--username"), OsString::from(username)]);
-    }
     let mut arguments = arguments.into_iter().peekable();
     if arguments
         .peek()
@@ -398,7 +399,7 @@ mod tests {
             OsString::from("--agent"),
             OsString::from("claude-code"),
         ];
-        let mut initial = args(&["--server", "https://original.example"]);
+        let mut initial = args(&["alice@original.example"]);
         initial.extend(trailing.clone());
         let options = super::super::Options::parse(initial).unwrap().unwrap();
         for selector in [
@@ -410,7 +411,7 @@ mod tests {
             let mut original = selector;
             original.extend(trailing.clone());
             let pinned = connection_arguments(original, &options, false).unwrap();
-            let mut expected = args(&["--server", "https://original.example"]);
+            let mut expected = args(&["alice@original.example"]);
             expected.extend(trailing.clone());
             assert_eq!(pinned, expected);
             // This is the same new-connection parser used after actual reexec.
@@ -440,24 +441,14 @@ mod tests {
             "--token-env",
             "SSMCP_TEST_PEER_TOKEN",
         ]);
-        let mut initial = args(&[
-            "--server",
-            "https://original.example",
-            "--title",
-            "client title",
-        ]);
+        let mut initial = args(&["alice@original.example", "--title", "client title"]);
         initial.extend(native.clone());
         let options = super::super::Options::parse(initial).unwrap().unwrap();
         let mut original = args(&["--context", "old-connection"]);
         original.extend(args(&["--title", "client title"]));
         original.extend(native.clone());
         let pinned = connection_arguments(original, &options, false).unwrap();
-        let mut expected = args(&[
-            "--server",
-            "https://original.example",
-            "--title",
-            "client title",
-        ]);
+        let mut expected = args(&["alice@original.example", "--title", "client title"]);
         expected.extend(native);
         assert_eq!(pinned, expected);
         let restored = super::super::Options::parse_new(pinned).unwrap().unwrap();

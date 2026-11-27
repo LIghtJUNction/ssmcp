@@ -6,7 +6,7 @@
 ssmcp alice@relay.example --name device-b
 ~~~
 
-控制者必须登录该服务器，才能查看和操作获准的设备。被控端的名字、工作目录和 caller 显示信息用于识别设备，不是登录凭据。[完整账号与授权说明](client-accounts.md)
+被控端启动时经中继验证设备账号，控制者在 MCP 应用中登录后可以操作获准的会话。在设备上使用 `/allow add 用户名`、`/allow list`、`/allow remove 用户名` 管理当前会话的控制者。[账号与在线额度](client-accounts.md)
 
 <a id="github-allow"></a>
 
@@ -151,10 +151,10 @@ F5 或 `ssmcp.ui.action` 的 `reload` 只重载本地显示配置；输入框中
 用户要求队列与本地成员目标需要协议 v7，源码审计需要 v6 或更新版本。队列中的已交付表示附加到符合目标的 `code_mode` 响应，不表示模型已经阅读或执行。受控重启通过私有、单次读取的交接文件保留草稿与队列；交付不确定或接收目标已变化的记录需要用户复核，不会自动重发。[队列状态与恢复](client-ui.md#输入要求与队列)
 
 ```sh
-ssmcp --server https://ssmcp.lmm.best --title "检查构建与测试" --username alice
-ssmcp --server https://ssmcp.lmm.best --theme nord --timestamps --username alice
-ssmcp --server https://ssmcp.lmm.best --log-format jsonl --username alice
-NO_COLOR=1 ssmcp --server https://ssmcp.lmm.best --username alice
+ssmcp alice@ssmcp.lmm.best --title "检查构建与测试"
+ssmcp alice@ssmcp.lmm.best --theme nord --timestamps
+ssmcp alice@ssmcp.lmm.best --log-format jsonl
+NO_COLOR=1 ssmcp alice@ssmcp.lmm.best
 ```
 
 更新已安装的程序后，可以从 `code_mode` 调用 `await call(clientId, "ssmcp.client.reload", {})`，让客户端从原安装入口重新启动，并保留启动参数、目录、环境和控制者用户名。先确认目录包含 `ssmcp.client.reload`；不支持该工具的旧客户端，初次升级须在本机普通重启。`accepted:true` 只是接收应答，应再调用 `list` 确认重连及新的 ID。重载会停止本连接拥有的命令任务和转发、关闭原生桥接；不会终止操作者已运行的外部 Pi/OpenCode 服务；在途调用会导致 busy 拒绝。[重载协议与回归测试](../src/client/reload.rs)
@@ -169,7 +169,7 @@ NO_COLOR=1 ssmcp --server https://ssmcp.lmm.best --username alice
 `--title` 为这一条连接附加任务说明，`--name` 用于辨认机器或工作区；两者都不代替唯一客户端 ID。标题支持中文和空格，最多 512 个 UTF-8 字节。升级时保留原有服务器、控制者用户名与名称等启动选项；标题只是显示元数据，不改变账号和授权名单。首次使用标题前应确认服务端支持该字段。[参数实现](../src/client.rs) · [会话说明](session-control.md)
 
 ```sh
-ssmcp --server https://ssmcp.lmm.best --name dev --title "修复构建并准备发布" --username alice
+ssmcp alice@ssmcp.lmm.best --name dev --title "修复构建并准备发布"
 ```
 
 重载只会重新启动原入口，不会下载更新或选择另一安装目录。Windows 手动按版本目录安装时，切换版本需停止旧进程并从新目录启动；使用安装器更新同一入口后，才可按上述重载流程接管。

@@ -1,4 +1,4 @@
-//! A worker connection is a read-only monitor, never an alternate composer.
+//! A worker monitor with navigation and physically entered capacity controls.
 mod clock;
 mod metrics;
 
@@ -91,6 +91,9 @@ pub(super) struct Monitor {
     coordination_rows: usize,
     resources: metrics::Sampler,
     help: bool,
+    capacity_input: Option<String>,
+    capacity_escape: bool,
+    pub(super) capacity_command: Option<(String, i32)>,
 }
 
 #[derive(Default)]
@@ -277,6 +280,8 @@ impl Monitor {
         };
         if self.generation.as_deref() != Some(snapshot.generation.as_str()) {
             self.generation = Some(snapshot.generation.clone());
+            self.capacity_input = None;
+            self.capacity_command = None;
             self.selected = 0;
             self.first = 0;
             self.anchors.clear();
@@ -309,7 +314,12 @@ impl Monitor {
         }
         self.resources.sample(snapshot.process_id, Instant::now());
         let width = usize::from(cols);
-        let count = (width.saturating_sub(4) / 19)
+        let tab_cells = if snapshot.slots.iter().any(SlotView::quiet_10m) {
+            25
+        } else {
+            19
+        };
+        let count = (width.saturating_sub(4) / tab_cells)
             .max(1)
             .min(snapshot.slots.len());
         self.first = self.first.min(self.selected);
@@ -321,9 +331,16 @@ impl Monitor {
         let mut col = 0;
         for slot in snapshot.slots.iter().skip(self.first).take(count) {
             let (tone, symbol, label) = slot_state(slot);
+            let quiet = if !slot.quiet_10m() {
+                ""
+            } else if width < 24 {
+                " ~"
+            } else {
+                " quiet"
+            };
             let text = if width < 24 {
                 format!(
-                    "{}#{:02} {symbol} ",
+                    "{}#{:02} {symbol}{quiet} ",
                     if self.selected_slot() == Some(slot.slot) {
                         "›"
                     } else {
@@ -333,7 +350,7 @@ impl Monitor {
                 )
             } else {
                 format!(
-                    "{}#{:02} {symbol} {label}  ",
+                    "{}#{:02} {symbol} {label}{quiet}  ",
                     if self.selected_slot() == Some(slot.slot) {
                         "› "
                     } else {
@@ -350,7 +367,12 @@ impl Monitor {
                 cols: tab_width,
             });
             col += tab_width;
-            navigation.push((tone, text));
+            let tab_tone = match tone {
+                PanelTone::Warning | PanelTone::Error => tone,
+                _ if self.selected_slot() == Some(slot.slot) => PanelTone::Heading,
+                _ => PanelTone::Muted,
+            };
+            navigation.push((tab_tone, text));
         }
         let mut output = vec![navigation];
         if available == 1 {
@@ -434,17 +456,15 @@ impl Monitor {
         let header_rows = usize::from(log_area_rows >= 2);
         let log_row = log_area_row + header_rows;
         let log_rows = log_area_rows.saturating_sub(header_rows + 1);
+        let commands_expanded = self
+            .expanded_commands
+            .get(&slot.slot)
+            .copied()
+            .unwrap_or(false);
         let entries = if task_view {
             task_lines(slot, snapshot, left_cols.saturating_sub(2).max(1))
         } else if details_view {
-            log_lines(
-                slot,
-                left_cols.saturating_sub(2).max(1),
-                self.expanded_commands
-                    .get(&slot.slot)
-                    .copied()
-                    .unwrap_or(false),
-            )
+            log_lines(slot, left_cols.saturating_sub(2).max(1), commands_expanded)
         } else {
             progress_lines(slot, left_cols.saturating_sub(2).max(1))
         };
@@ -503,8 +523,10 @@ impl Monitor {
                     } else {
                         "  Recent agent progress".into()
                     }
+                } else if commands_expanded {
+                    "  Work log · Enter Preview".into()
                 } else {
-                    "  Work log".into()
+                    "  Work log · Enter Full command".into()
                 },
             );
             output.push(if split {
@@ -596,11 +618,103 @@ impl Monitor {
 }
 
 impl State {
+    /// This path is called only by the dedicated foreground monitor stdin reader.
+    /// Browser, attach and generated text use the navigation-only keyboard path.
+    pub(super) fn physical_worker_keyboard(&mut self, mut bytes: &[u8], now: Instant, flush: bool) {
+        while let Some((&byte, rest)) = bytes.split_first() {
+            if self.keyboard.pasting {
+                let consumed = self.keyboard.paste_literal_prefix(bytes, now);
+                if consumed > 0 {
+                    bytes = &bytes[consumed..];
+                    continue;
+                }
+            }
+            let ready = self.keyboard.pending.is_empty() && !self.keyboard.pasting;
+            let monitor = self.worker.as_mut().expect("monitor input");
+            if byte == 0x1b || matches!(byte, 3 | 9 | 18) {
+                // This also cancels the draft on a bracketed paste start.
+                if monitor.capacity_input.take().is_some() {
+                    monitor.capacity_escape = byte == 0x1b;
+                    self.dirty = true;
+                }
+            } else if ready && !monitor.help {
+                if let Some(draft) = &mut monitor.capacity_input {
+                    match byte {
+                        b'\r' => {
+                            let text = monitor.capacity_input.take().unwrap();
+                            let parsed = text
+                                .strip_prefix("/worker ")
+                                .and_then(|args| crate::client::worker_control::parse(args).ok());
+                            self.notice = Some(match parsed {
+                                Some(crate::client::worker_control::Command::Delta(_))
+                                    if self.preview =>
+                                {
+                                    "Preview has no connected worker pool.".into()
+                                }
+                                Some(crate::client::worker_control::Command::Delta(delta)) => {
+                                    if let Some(generation) = &monitor.generation
+                                        && monitor.capacity_command.is_none()
+                                    {
+                                        monitor.capacity_command =
+                                            Some((generation.clone(), delta));
+                                        format!("Sending /worker {delta:+} to the main terminal.")
+                                    } else {
+                                        "The worker pool is not ready for a new request.".into()
+                                    }
+                                }
+                                _ => "Use /worker +N or /worker -N.".into(),
+                            });
+                        }
+                        8 | 127 => {
+                            draft.pop();
+                            if draft.is_empty() {
+                                monitor.capacity_input = None;
+                            }
+                        }
+                        32..=126 if draft.len() < 32 => draft.push(char::from(byte)),
+                        _ => {
+                            monitor.capacity_input = None;
+                            self.notice = Some(
+                                "Capacity command cancelled. Use /worker +N or /worker -N.".into(),
+                            );
+                        }
+                    }
+                    self.dirty = true;
+                    bytes = rest;
+                    continue;
+                }
+                if byte == b'/' {
+                    monitor.capacity_input = Some("/".into());
+                    self.dirty = true;
+                    bytes = rest;
+                    continue;
+                }
+            }
+            self.worker_keyboard(&[byte], now, false);
+            bytes = rest;
+        }
+        if flush {
+            self.worker_keyboard(&[], now, true);
+        }
+    }
+
     pub(super) fn worker_keyboard(&mut self, bytes: &[u8], now: Instant, flush: bool) {
         // The raw decoder keeps split paste markers and pasted control keys literal.
         // Text is discarded; only navigation and actual monitor controls act.
         let (_, actions) = self.keyboard.feed_worker(bytes, now, flush);
+        let dismiss_draft = self
+            .worker
+            .as_ref()
+            .is_some_and(|monitor| monitor.capacity_escape);
+        if self.keyboard.pending.is_empty()
+            && let Some(monitor) = self.worker.as_mut()
+        {
+            monitor.capacity_escape = false;
+        }
         for action in actions {
+            if dismiss_draft && matches!(action, Key::Escape) {
+                continue;
+            }
             if matches!(action, Key::Interrupt) {
                 request_interrupt(self);
                 return;
@@ -758,100 +872,45 @@ impl State {
             monitor.coordination_row = 0;
             monitor.coordination_rows = 0;
         }
-        let mut rows = vec![
-            line(
-                self,
-                &[(
-                    PanelTone::Heading,
-                    format!("SSMCP · Workers{}", self.context_label),
-                )],
-            ),
-            String::new(),
-        ];
+        let mut rows = vec![line(
+            self,
+            &[(
+                PanelTone::Heading,
+                format!("SSMCP · Workers{}", self.context_label),
+            )],
+        )];
         if let Some(notice) = &self.notice {
-            rows[1] = line(self, &[(PanelTone::Warning, notice.clone())]);
+            rows.push(line(self, &[(PanelTone::Warning, notice.clone())]));
         }
         if let Some(snapshot) = snapshot {
-            let capacity = line(self, &[(PanelTone::Heading, "Station capacity".into())]);
-            if self.notice.is_some() {
-                rows.push(capacity);
+            use crate::worker::productivity::{TITLE, WIDTH};
+
+            let chart = snapshot
+                .productivity
+                .as_ref()
+                .filter(|_| g.cols >= 96 && height >= 12);
+            let capacity_width = if chart.is_some() {
+                g.cols - WIDTH
             } else {
-                rows[1] = capacity;
-            }
-            let counts = [
-                (PanelTone::Success, format!("○ Idle {}", snapshot.idle)),
-                (
-                    PanelTone::Warning,
-                    format!("● Working {}", snapshot.working),
-                ),
-                (
-                    if snapshot.offline == 0 {
-                        PanelTone::Muted
-                    } else {
-                        PanelTone::Error
-                    },
-                    format!("× Offline {}", snapshot.offline),
-                ),
-                (
-                    if snapshot.retiring == 0 {
-                        PanelTone::Muted
-                    } else {
-                        PanelTone::Warning
-                    },
-                    format!("◌ Retiring {}", snapshot.retiring),
-                ),
-                (PanelTone::Accent, format!("Σ Total {}", snapshot.total)),
-                (
-                    PanelTone::Muted,
-                    format!(
-                        "Registered {}/{}",
-                        snapshot.registered_workers, snapshot.desired_total
-                    ),
-                ),
-            ];
-            let per_row = if g.cols >= 120 {
-                6
-            } else if g.cols >= 74 {
-                3
-            } else if g.cols >= 36 {
-                2
-            } else {
-                1
+                g.cols
             };
-            for group in counts.chunks(per_row) {
-                let parts: Vec<_> = group
-                    .iter()
-                    .enumerate()
-                    .map(|(index, (tone, text))| {
-                        (
-                            *tone,
-                            format!("{}{text}", if index == 0 { "" } else { "    " }),
-                        )
-                    })
-                    .collect();
-                rows.push(line(self, &parts));
+            let capacity = capacity_rows(snapshot, capacity_width);
+            let plot: Vec<_> = chart
+                .map(|series| {
+                    std::iter::once(TITLE.to_owned())
+                        .chain(series.plot())
+                        .collect()
+                })
+                .unwrap_or_default();
+            for row in 0..capacity.len().max(plot.len()) {
+                let fields = capacity.get(row).map(Vec::as_slice).unwrap_or_default();
+                let mut rendered = line_at_width(self, fields, capacity_width);
+                if chart.is_some() {
+                    let text = plot.get(row).cloned().unwrap_or_default();
+                    rendered.push_str(&line_at_width(self, &[(PanelTone::Muted, text)], WIDTH));
+                }
+                rows.push(rendered);
             }
-            rows.push(line(
-                self,
-                &[(PanelTone::Normal, member_activity_summary(snapshot, g.cols))],
-            ));
-            let stopping = snapshot.stopping || snapshot.closed;
-            let status = if stopping && snapshot.working > 0 {
-                "Stopping · waiting for worker confirmation"
-            } else if stopping && snapshot.retiring > 0 {
-                "Stopping · waiting for retirement confirmation"
-            } else if stopping {
-                "Stopped"
-            } else {
-                "FIFO assignment"
-            };
-            rows.push(line(
-                self,
-                &[(
-                    PanelTone::Muted,
-                    format!("Queued {} · {status}", snapshot.queued),
-                )],
-            ));
             let coordination = serde_json::to_value(snapshot)
                 .ok()
                 .map(|pool| {
@@ -955,7 +1014,18 @@ impl State {
                 "Tab/Shift+Tab ←→ Worker · F2 Logs & metrics · T Task · ↑↓ PgUp/PgDn · End Live · F1 Help · ^R Reload · ^C"
             }
         };
-        rows.push(line(self, &[(PanelTone::Muted, footer.into())]));
+        let draft = self
+            .worker
+            .as_ref()
+            .and_then(|monitor| monitor.capacity_input.as_deref());
+        let footer = match draft {
+            Some(text) => format!("{text}▏  Enter · Esc"),
+            None if !help && g.cols >= 48 && footer.width() + 11 <= usize::from(g.cols) => {
+                format!("/ Resize · {footer}")
+            }
+            None => footer.into(),
+        };
+        rows.push(line(self, &[(PanelTone::Muted, footer)]));
         Frame {
             geometry: g,
             rows,
@@ -1032,6 +1102,8 @@ fn monitor_help(width: usize) -> Vec<(PanelTone, String)> {
         "Enter   Open logs / expand command text",
         "T   Full task / back",
         "Ctrl+R Reload · Ctrl+C Stop",
+        "/worker +N or -N   Enter to resize · Esc cancels",
+        "Main chat · /worker retire #NN selects one station",
     ]
     .into_iter()
     .enumerate()
@@ -1053,6 +1125,7 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
         return Vec::new();
     }
     let task = slot.task_id.as_ref().and(slot.task_summary.as_deref());
+    let show_retire_command = slot.retire_requested && budget >= 3;
     let mut rows = activity_field(
         "Task",
         task,
@@ -1062,15 +1135,12 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
             "No active task"
         },
         width,
-        budget.saturating_sub(1).max(1),
+        budget
+            .saturating_sub(1 + usize::from(show_retire_command))
+            .max(1),
     );
     if rows.len() < budget {
         let (tone, _, state) = slot_state(slot);
-        let moon = if slot.dreaming && slot.activity_status == Some("offline") {
-            "☾"
-        } else {
-            ""
-        };
         let elapsed = slot
             .current_task_elapsed_ms
             .map(|ms| format!(" · {}", duration(ms)))
@@ -1095,13 +1165,27 @@ fn progress_summary(slot: &SlotView, width: usize, budget: usize) -> Vec<(PanelT
                 }
             })
             .unwrap_or_default();
+        let quiet = if slot.quiet_10m() && width >= 28 {
+            " · quiet"
+        } else {
+            ""
+        };
         rows.push((
             tone,
             clipped(
-                &format!("{state}{moon}{calls}{elapsed}{retiring}{reason}"),
+                &format!("{state}{quiet}{calls}{elapsed}{retiring}{reason}"),
                 width,
             ),
         ));
+    }
+    if show_retire_command && rows.len() < budget {
+        let command = format!("/worker retire #{:02}", slot.slot + 1);
+        let label = if width >= command.len() + 12 {
+            format!("Main chat · {command}")
+        } else {
+            command
+        };
+        rows.push((PanelTone::Muted, clipped(&label, width)));
     }
     rows
 }
@@ -1202,72 +1286,84 @@ fn command_summary(command: &str) -> String {
     }
 }
 
-fn command_log_summary(text: &str) -> String {
-    for prefix in ["Command started: ", "Command finished: "] {
-        if let Some(command) = text.strip_prefix(prefix) {
-            let (command, outcome) = (prefix == "Command finished: ")
-                .then(|| command.rsplit_once("; "))
-                .flatten()
-                .filter(|(_, outcome)| {
-                    outcome
-                        .strip_prefix("exit ")
-                        .or_else(|| outcome.strip_prefix("signal "))
-                        .is_some_and(|code| code.parse::<i32>().is_ok())
-                        || matches!(*outcome, "cancelled" | "timed out")
-                })
-                .map_or((command, None), |(command, outcome)| {
-                    (command, Some(outcome))
-                });
-            return format!(
-                "{prefix}{}{}",
-                command_summary(command),
-                outcome.map_or_else(String::new, |outcome| format!("; {outcome}"))
-            );
-        }
-    }
-    text.to_owned()
+fn command_preview(command: &str) -> String {
+    let Ok(args) = serde_json::from_str::<Vec<String>>(command) else {
+        // A long retained command may have been clipped inside a JSON string.
+        return clipped(command, 88);
+    };
+    let redacted = crate::audit::event(serde_json::json!({ "argv": args }));
+    let preview = redacted["argv"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .map(|arg| {
+            if arg.is_empty() || arg.chars().any(|c| c.is_whitespace() || c == '"') {
+                format!("{arg:?}")
+            } else {
+                arg.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    clipped(&preview, 88)
+}
+
+fn command_result(text: &str) -> Option<(&str, &str)> {
+    text.rsplit_once("; ").filter(|(_, outcome)| {
+        matches!(*outcome, "cancelled" | "timed out")
+            || outcome
+                .strip_prefix("exit ")
+                .or_else(|| outcome.strip_prefix("signal "))
+                .is_some_and(|code| code.parse::<i32>().is_ok())
+    })
 }
 
 fn log_event(entry: &crate::worker::SlotLog, expanded: bool) -> (&'static str, PanelTone, String) {
-    let text = if expanded {
-        entry.text.clone()
-    } else {
-        command_log_summary(&entry.text)
-    };
+    let text = entry.text.as_str();
     let (tag, tone, body) = if let Some(command) = text.strip_prefix("Command started: ") {
-        ("RUN", PanelTone::Accent, command)
+        let body = if expanded {
+            command.to_owned()
+        } else {
+            command_preview(command)
+        };
+        ("RUN", PanelTone::Accent, body)
     } else if let Some(command) = text.strip_prefix("Command finished: ") {
-        // Only an explicit result suffix is evidence of success. An inline
-        // script containing "exit 0" or a missing outcome never becomes DONE.
-        let outcome = command.rsplit_once("; ").map(|(_, outcome)| outcome);
+        // Classify from the retained record before rendering its preview.
+        let (invocation, outcome) = command_result(command)
+            .map_or((command, None), |(invocation, outcome)| {
+                (invocation, Some(outcome))
+            });
         let (tag, tone) = match outcome {
             Some("exit 0") => ("DONE", PanelTone::Success),
             Some("cancelled") => ("STOP", PanelTone::Warning),
-            Some("timed out") => ("FAIL", PanelTone::Error),
-            Some(outcome)
-                if outcome
-                    .strip_prefix("exit ")
-                    .or_else(|| outcome.strip_prefix("signal "))
-                    .is_some_and(|code| code.parse::<i32>().is_ok()) =>
-            {
-                ("FAIL", PanelTone::Error)
-            }
-            _ => ("END", PanelTone::Muted),
+            Some(_) => ("FAIL", PanelTone::Error),
+            None => ("END", PanelTone::Muted),
         };
-        (tag, tone, command)
+        let body = if expanded {
+            command.to_owned()
+        } else {
+            let mut preview = command_preview(invocation);
+            if let Some(outcome) = outcome {
+                preview.push_str("; ");
+                preview.push_str(outcome);
+            }
+            preview
+        };
+        (tag, tone, body)
     } else if let Some(progress) = text.strip_prefix("Progress: ") {
-        ("NOTE", PanelTone::Accent, progress)
+        ("NOTE", PanelTone::Accent, progress.to_owned())
     } else if text.starts_with("Task ") {
-        ("TASK", PanelTone::Accent, text.as_str())
+        ("TASK", PanelTone::Accent, text.to_owned())
     } else {
-        ("INFO", PanelTone::Muted, text.as_str())
+        ("INFO", PanelTone::Muted, text.to_owned())
     };
     let (tag, tone) = match entry.level.as_str() {
         "error" => ("FAIL", PanelTone::Error),
         "warning" | "warn" => ("WARN", PanelTone::Warning),
         _ => (tag, tone),
     };
-    (tag, tone, panel::safe_text(body))
+    (tag, tone, panel::safe_text(&body))
 }
 
 fn wrap_log_body(text: &str, width: usize) -> Vec<String> {
@@ -1614,14 +1710,7 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
         } else if let Some((command, result)) = entry
             .text
             .strip_prefix("Command finished: ")
-            .and_then(|text| text.rsplit_once("; "))
-            .filter(|(_, result)| {
-                matches!(*result, "cancelled" | "timed out")
-                    || result
-                        .strip_prefix("exit ")
-                        .or_else(|| result.strip_prefix("signal "))
-                        .is_some_and(|code| code.parse::<i32>().is_ok())
-            })
+            .and_then(command_result)
         {
             if result == "exit 0" && entry.level == "info" {
                 if !newest {
@@ -1713,34 +1802,112 @@ fn progress_lines(slot: &SlotView, width: usize) -> Vec<LogLine> {
     output
 }
 
+fn capacity_rows(snapshot: &Snapshot, cols: u16) -> Vec<Vec<(PanelTone, String)>> {
+    let dreaming = snapshot.slots.iter().filter(|slot| slot.dreaming).count();
+    let mut fields = vec![
+        (PanelTone::Heading, "Station capacity".to_owned()),
+        (PanelTone::Normal, format!("Working {}", snapshot.working)),
+        (PanelTone::Normal, format!("Idle {}", snapshot.idle)),
+        (PanelTone::Muted, format!("↳ Dreaming {dreaming}")),
+        (
+            if snapshot.offline > 0 {
+                PanelTone::Error
+            } else {
+                PanelTone::Muted
+            },
+            format!("Offline {}", snapshot.offline),
+        ),
+        (
+            if snapshot.retiring > 0 {
+                PanelTone::Warning
+            } else {
+                PanelTone::Muted
+            },
+            format!("Retiring {}", snapshot.retiring),
+        ),
+        (PanelTone::Muted, format!("Total {}", snapshot.total)),
+        (
+            PanelTone::Muted,
+            format!(
+                "Registered {}/{}",
+                snapshot.registered_workers, snapshot.total
+            ),
+        ),
+    ];
+    if snapshot.desired_total != snapshot.total {
+        fields.push((
+            PanelTone::Warning,
+            format!("Target {}→{}", snapshot.total, snapshot.desired_total),
+        ));
+    }
+    fields.push((PanelTone::Normal, format!("Queued {}", snapshot.queued)));
+
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
+    let mut used = 0;
+    for (tone, text) in fields {
+        let width = text.width();
+        if !row.is_empty() && used + 3 + width > usize::from(cols) {
+            rows.push(std::mem::take(&mut row));
+            used = 0;
+        }
+        if row.is_empty() {
+            row.push((tone, text));
+        } else {
+            row.push((tone, format!("   {text}")));
+            used += 3;
+        }
+        used += width;
+    }
+    rows.push(row);
+    rows.push(vec![(
+        PanelTone::Muted,
+        member_activity_summary(snapshot, cols),
+    )]);
+    if snapshot.stopping || snapshot.closed {
+        let status = if snapshot.working > 0 {
+            "Stopping · waiting for worker confirmation"
+        } else if snapshot.retiring > 0 {
+            "Stopping · waiting for retirement confirmation"
+        } else {
+            "Stopped"
+        };
+        rows.push(vec![(PanelTone::Warning, status.into())]);
+    }
+    rows
+}
+
 fn member_activity_summary(snapshot: &Snapshot, cols: u16) -> String {
     let observed = snapshot
         .slots
         .iter()
         .filter(|slot| slot.tool_calls_10m.is_some())
         .count();
-    let offline = snapshot
-        .slots
-        .iter()
-        .filter(|slot| slot.activity_status == Some("offline"))
-        .count();
-    match (observed, cols) {
-        (0, _) => "Members unknown".into(),
-        (_, 0..=28) => format!("Members offline {offline}"),
-        (_, 29..=49) => format!("Members offline {offline}/{observed} · 10m"),
-        _ => format!("Member activity · Offline {offline} of {observed} observed (10m)"),
+    if observed == 0 {
+        return "Members unknown".into();
     }
+    let quiet = snapshot.slots.iter().filter(|slot| slot.quiet_10m());
+    let count = quiet.clone().count();
+    let mut text = if cols < 50 {
+        format!("10m quiet {count}/{observed}")
+    } else {
+        format!("Member activity · Quiet {count}/{observed} (10m)")
+    };
+    for slot in quiet {
+        let id = format!(" #{:02}", slot.slot + 1);
+        if text.width() + id.width() > usize::from(cols) {
+            break;
+        }
+        text.push_str(&id);
+    }
+    text
 }
 
 fn slot_state(slot: &SlotView) -> (PanelTone, &'static str, &'static str) {
-    if slot.activity_status == Some("offline") {
-        let symbol = if slot.dreaming { "×☾" } else { "×" };
-        return (PanelTone::Error, symbol, "offline");
-    }
-    match slot.state {
-        "idle" if slot.dreaming => (PanelTone::Accent, "☾", "Dreaming"),
-        "idle" => (PanelTone::Success, "○", "idle"),
-        "working" => (PanelTone::Warning, "●", "working"),
+    match slot.display_state() {
+        "dreaming" => (PanelTone::Muted, "☾", "Dreaming"),
+        "idle" => (PanelTone::Muted, "○", "idle"),
+        "working" => (PanelTone::Normal, "●", "working"),
         "offline" => (PanelTone::Error, "×", "offline"),
         "retiring" => (PanelTone::Warning, "◌", "retiring"),
         _ => (PanelTone::Muted, "?", "unknown"),
@@ -2199,19 +2366,20 @@ fn wrap_activity(text: &str, width: usize, max_rows: usize) -> Vec<String> {
 }
 
 fn line(state: &State, parts: &[(PanelTone, String)]) -> String {
+    line_at_width(state, parts, state.geometry.cols)
+}
+
+fn line_at_width(state: &State, parts: &[(PanelTone, String)], cols: u16) -> String {
     let mut width = 0;
     let mut output = String::new();
     for (tone, text) in parts {
-        let text = fit(
-            &panel::safe_text(text),
-            state.geometry.cols.saturating_sub(width),
-        );
+        let text = fit(&panel::safe_text(text), cols.saturating_sub(width));
         width += u16::try_from(text.width()).unwrap_or(u16::MAX);
         output.push_str(&state.tone(*tone, &text));
     }
     output.push_str(&state.tone(
         PanelTone::Normal,
-        &" ".repeat(usize::from(state.geometry.cols.saturating_sub(width))),
+        &" ".repeat(usize::from(cols.saturating_sub(width))),
     ));
     output
 }
@@ -2247,6 +2415,7 @@ mod tests {
             generation: "fixture".into(),
             manager: None,
             manager_operations: Vec::new(),
+            productivity: None,
             total: 3,
             desired_total: 3,
             registered_workers: 2,
@@ -2371,16 +2540,68 @@ mod tests {
             let frame = state.worker_frame(Some(&snapshot));
             let text = screen(&frame).screen().contents();
             assert!(text.contains("Idle 1"), "{text}");
-            assert!(
-                text.contains(if cols < 24 { "☾" } else { "Dreaming" }),
-                "{text}"
-            );
+            assert!(text.contains("Dreaming 1"), "{text}");
 
             snapshot.slots[0].dreaming = false;
             let frame = state.worker_frame(Some(&snapshot));
             let text = screen(&frame).screen().contents();
-            assert!(!text.contains('☾') && !text.contains("Dreaming"), "{text}");
+            assert!(text.contains("Dreaming 0"), "{text}");
         }
+    }
+
+    #[test]
+    fn quiet_claim_during_shrink_keeps_its_working_tab_and_current_capacity() {
+        let mut snapshot = snapshot();
+        let working = snapshot.slots[1].clone();
+        snapshot.slots = (0..6)
+            .map(|slot| SlotView {
+                slot,
+                task_id: Some(format!("claim-{slot}")),
+                tool_calls_10m: Some(if slot == 3 { 0 } else { 1 }),
+                activity_status: (slot == 3).then_some("offline"),
+                retire_requested: slot == 3,
+                ..working.clone()
+            })
+            .collect();
+        snapshot.total = 6;
+        snapshot.registered_workers = 6;
+        snapshot.desired_total = 5;
+        snapshot.working = 6;
+        snapshot.idle = 0;
+        snapshot.offline = 0;
+        let quiet = &snapshot.slots[3];
+        assert_eq!(quiet.display_state(), "working");
+        assert!(quiet.quiet_10m());
+        for cols in [18, 32, 80, 160] {
+            let mut view = state(30, cols, false);
+            let text = screen(&view.worker_frame(Some(&snapshot)))
+                .screen()
+                .contents();
+            for expected in [
+                "Working 6",
+                "Offline 0",
+                "Registered 6/6",
+                "Target 6→5",
+                "#04",
+            ] {
+                assert!(text.contains(expected), "{cols}: {text}");
+            }
+            if cols < 50 {
+                assert!(text.contains("10m quiet 1/6 #04"), "{text}");
+            } else {
+                assert!(text.contains("Quiet 1/6 (10m) #04"), "{text}");
+            }
+            if cols == 160 {
+                assert!(text.contains("#04 ● working quiet"), "{text}");
+            }
+        }
+        let progress = progress_summary(quiet, 96, 3);
+        assert!(
+            progress
+                .iter()
+                .any(|(_, text)| text.contains("working · quiet · 0 calls/10m"))
+        );
+        assert_eq!(quiet.task_id.as_deref(), Some("claim-3"));
     }
 
     #[test]
@@ -2391,7 +2612,7 @@ mod tests {
         let mut view = state(20, 100, false);
         let offline = view.worker_frame(Some(&snapshot));
         let text = screen(&offline).screen().contents();
-        assert!(text.contains("offline · 0 calls/10m"), "{text}");
+        assert!(text.contains("idle · quiet · 0 calls/10m"), "{text}");
         assert!(text.contains("Idle 1"), "{text}");
 
         snapshot.slots[0].tool_calls_10m = Some(4);
@@ -2407,6 +2628,70 @@ mod tests {
     }
 
     #[test]
+    fn pending_retirement_shows_the_selected_station_command() {
+        let mut snapshot = snapshot();
+        let slot = &mut snapshot.slots[2];
+        let has_command = |slot: &SlotView, width| {
+            progress_summary(slot, width, 3)
+                .iter()
+                .any(|(_, text)| text.contains("/worker retire #03"))
+        };
+        assert!(!has_command(slot, 80));
+        slot.retire_requested = true;
+        assert!(has_command(slot, 80));
+        assert!(has_command(slot, 20));
+    }
+
+    #[test]
+    fn capacity_wraps_at_the_terminal_width_without_reserving_an_empty_chart() {
+        let snapshot = snapshot();
+        let mut wide = state(24, 120, true);
+        let rendered = screen(&wide.worker_frame(Some(&snapshot)));
+        let text = rendered.screen().contents();
+        let summary = text
+            .lines()
+            .find(|line| line.contains("Station capacity"))
+            .unwrap();
+        assert!(
+            summary.contains("Working 1") && summary.contains("Offline 1"),
+            "{text}"
+        );
+        assert!(!text.contains("No call history"), "{text}");
+        let mut narrow = state(24, 32, false);
+        narrow.worker_frame(Some(&snapshot));
+        let tab_row = |view: &State| view.worker.as_ref().unwrap().tabs[0].row;
+        assert!(tab_row(&wide) < tab_row(&narrow));
+    }
+
+    #[test]
+    fn productivity_curve_uses_the_right_side_of_the_worker_header() {
+        let mut snapshot = snapshot();
+        snapshot.productivity = Some(crate::worker::productivity::Productivity {
+            members: 2,
+            calls_per_minute: [0, 1, 0, 3, 20, 1, 0, 3, 0, 2],
+        });
+        let mut wide = state(24, 110, false);
+        let frame = wide.worker_frame(Some(&snapshot));
+        let text = screen(&frame).screen().contents();
+        let capacity = text
+            .lines()
+            .find(|line| line.contains("Station capacity"))
+            .unwrap();
+        assert!(capacity.contains("Worker calls/min (log)"), "{text}");
+        assert!(text.contains("20 |"), "{text}");
+        assert!(text.contains("-10m -------- now"), "{text}");
+
+        let mut narrow = state(24, 80, false);
+        let frame = narrow.worker_frame(Some(&snapshot));
+        assert!(
+            !screen(&frame)
+                .screen()
+                .contents()
+                .contains("Worker calls/min")
+        );
+    }
+
+    #[test]
     fn quiet_dreaming_member_keeps_a_moon_and_capacity_totals() {
         let mut snapshot = snapshot();
         snapshot.slots[0].tool_calls_10m = Some(0);
@@ -2414,9 +2699,9 @@ mod tests {
         snapshot.slots[0].dreaming = true;
         snapshot.slots[1].tool_calls_10m = Some(5);
         for (cols, count) in [
-            (18, "Members offline 1"),
-            (32, "Members offline 1/2 · 10m"),
-            (100, "Member activity · Offline 1 of 2 observed (10m)"),
+            (18, "10m quiet 1/2 #01"),
+            (32, "10m quiet 1/2 #01"),
+            (100, "Member activity · Quiet 1/2 (10m) #01"),
         ] {
             let mut view = state(24, cols, false);
             let frame = view.worker_frame(Some(&snapshot));
@@ -2427,20 +2712,20 @@ mod tests {
                 "Working 1",
                 "Offline 1",
                 count,
-                "×☾",
+                "Dreaming 1",
             ] {
                 assert!(text.contains(part), "{cols} columns: {text}");
             }
         }
         let compact = progress_summary(&snapshot.slots[0], 14, 3);
         assert!(
-            compact.iter().any(|(_, line)| line == "offline☾ 0/10m"),
+            compact.iter().any(|(_, line)| line == "Dreaming 0/10m"),
             "{compact:?}"
         );
         snapshot.slots[0].dreaming = false;
         let mut view = state(24, 100, false);
         let frame = view.worker_frame(Some(&snapshot));
-        assert!(!screen(&frame).screen().contents().contains('☾'));
+        assert!(screen(&frame).screen().contents().contains("Dreaming 0"));
         assert_eq!(
             member_activity_summary(&self::snapshot(), 18),
             "Members unknown"
@@ -2455,6 +2740,7 @@ mod tests {
                 let frame = state.worker_frame(Some(&snapshot()));
                 let text = screen(&frame).screen().contents();
                 for label in [
+                    "Dreaming 0",
                     "Idle 1",
                     "Working 1",
                     "Offline 1",
@@ -3522,6 +3808,73 @@ mod tests {
     }
 
     #[test]
+    fn only_a_physically_typed_monitor_count_can_forward_a_delta() {
+        let now = Instant::now();
+        for input in [b"/worker -1\r".as_slice(), b"/worker +1\r"] {
+            for split in 0..=input.len() {
+                let mut state = state(20, 80, false);
+                state.preview = false;
+                state.worker.as_mut().unwrap().generation = Some("pool".into());
+                state.physical_worker_keyboard(&input[..split], now, false);
+                state.physical_worker_keyboard(&input[split..], now, false);
+                let request = state
+                    .worker
+                    .as_mut()
+                    .unwrap()
+                    .capacity_command
+                    .take()
+                    .unwrap();
+                assert_eq!(
+                    request,
+                    ("pool".into(), if input[8] == b'-' { -1 } else { 1 })
+                );
+            }
+        }
+        for bytes in [
+            b"\x1b[200~/worker -1\r\x1b[201~\r".as_slice(),
+            b"/worker -1\x1b[200~ignored\x1b[201~\r",
+            b"/worker -1\x1b\r",
+            b"/worker retire #04\r",
+            b"/worker -129\r",
+        ] {
+            for split in 0..=bytes.len() {
+                let mut state = state(20, 80, false);
+                state.preview = false;
+                state.worker.as_mut().unwrap().generation = Some("pool".into());
+                state.physical_worker_keyboard(&bytes[..split], now, false);
+                state.physical_worker_keyboard(&bytes[split..], now, false);
+                assert!(state.worker.as_ref().unwrap().capacity_command.is_none());
+            }
+        }
+        let mut details = state(20, 80, false);
+        let snapshot = populated();
+        details.worker_frame(Some(&snapshot));
+        details.physical_worker_keyboard(b"\x1bOQ", now, false);
+        assert!(details.worker.as_ref().unwrap().showing_details(0));
+        details.physical_worker_keyboard(b"/worker -1\x1b", now, false);
+        details.physical_worker_keyboard(&[], now + std::time::Duration::from_millis(100), true);
+        let monitor = details.worker.as_ref().unwrap();
+        assert!(monitor.capacity_command.is_none() && monitor.capacity_input.is_none());
+        assert!(monitor.showing_details(0));
+        for width in [32, 80, 120] {
+            let mut state = state(20, width, false);
+            state.preview = false;
+            state.worker.as_mut().unwrap().generation = Some("pool".into());
+            state.keyboard(b"/worker -1\r", now, false);
+            assert!(state.worker.as_ref().unwrap().capacity_command.is_none());
+            state.physical_worker_keyboard(b"/worker -", now, false);
+            let frame = state.worker_frame(None);
+            assert!(screen(&frame).screen().contents().contains("/worker -"));
+            state.keyboard(b"1\r", now, false);
+            assert!(state.worker.as_ref().unwrap().capacity_command.is_none());
+            assert_eq!(
+                state.worker.as_ref().unwrap().capacity_input.as_deref(),
+                Some("/worker -")
+            );
+        }
+    }
+
+    #[test]
     fn worker_reload_queues_one_restart_and_never_edits_or_interrupts_the_composer() {
         for bytes in [b"\x12\x12".as_slice(), b"\x1b[114;5u", b"\x1b[27;5;114~"] {
             for split in 0..=bytes.len() {
@@ -3657,7 +4010,8 @@ mod tests {
         assert!(compact.len() < full.len());
         let compact = log_body(&compact);
         let full = log_body(&full);
-        assert!(compact.contains("[inline script]") && compact.contains("exit 0"));
+        assert!(compact.contains("python3 -c") && compact.contains("script;"));
+        assert!(compact.contains("exit 0") && compact.contains('…'));
         assert!(!compact.contains("FULL_COMMAND_END"));
         assert!(full.contains("FULL_COMMAND_END"));
         state.worker_frame(Some(&snapshot));
@@ -3936,12 +4290,33 @@ mod tests {
     }
     #[test]
     fn worker_command_start_does_not_report_script_exit_as_an_observed_result() {
-        let text = command_log_summary(r#"Command started: ["sh","-c","echo ok; exit 0"]"#);
-        assert_eq!(text, "Command started: sh -c [inline script]");
-        let text = command_log_summary(r#"Command finished: ["sh","-c","echo ok; exit 0"]"#);
-        assert_eq!(text, "Command finished: sh -c [inline script]");
-        let text =
-            command_log_summary(r#"Command finished: ["sh","-c","echo ok; exit 0"]; exit 7"#);
-        assert_eq!(text, "Command finished: sh -c [inline script]; exit 7");
+        for (text, expected_tag) in [
+            (r#"Command started: ["sh","-c","echo ok; exit 0"]"#, "RUN"),
+            (r#"Command finished: ["sh","-c","echo ok; exit 0"]"#, "END"),
+            (
+                r#"Command finished: ["sh","-c","echo ok; exit 0"]; exit 7"#,
+                "FAIL",
+            ),
+        ] {
+            let entry = SlotLog {
+                text: text.into(),
+                ..log(0)
+            };
+            let (tag, _, body) = log_event(&entry, false);
+            assert_eq!(tag, expected_tag);
+            assert!(body.contains(r#"sh -c "echo ok; exit 0""#), "{body}");
+            assert_eq!(body.ends_with("; exit 7"), expected_tag == "FAIL");
+        }
+    }
+
+    #[test]
+    fn worker_command_preview_handles_a_truncated_invocation_and_keeps_redaction() {
+        let preview = command_preview(r#"["bash","-c","printf hello; …"#);
+        assert!(preview.contains("printf hello"), "{preview}");
+        let preview = command_preview(r#"["bash","-c","echo hello; password=fixture-secret"]"#);
+        assert!(!preview.contains("fixture-secret"), "{preview}");
+        assert!(preview.contains("echo hello"), "{preview}");
+        let preview = command_preview(r#"["curl","--token","fixture-secret"]"#);
+        assert!(!preview.contains("fixture-secret"), "{preview}");
     }
 }

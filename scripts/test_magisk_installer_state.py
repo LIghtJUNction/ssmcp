@@ -93,6 +93,8 @@ printf '%s\\n' "$$" >> "$FIXTURE/starts"
 mkdir -p "$FIXTURE/proc/$$" || exit 1
 ln "$0" "$FIXTURE/proc/$$/exe" || exit 1
 printf '%s\\nhttp://127.0.0.1:%s/#%s\\n' "$$" "$3" "$FIXTURE_FRAGMENT" > "$2/staged.url"
+printf '%s\\nhttp://127.0.0.1:%s/setup#%s\\n' "$$" "$3" "$FIXTURE_SETUP_FRAGMENT" > "$2/staged-setup.url"
+mv "$2/staged-setup.url" "$2/setup.url"
 mv "$2/staged.url" "$2/console.url"
 """)
         executable(system_bin / "am", """
@@ -101,7 +103,7 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
 """)
         self.environment = {
             "ARCH": "arm64", "API": "36", "BOOTMODE": "true",
-            "FIXTURE": str(self.root), "FIXTURE_FRAGMENT": "a" * 64,
+            "FIXTURE": str(self.root), "FIXTURE_FRAGMENT": "a" * 64, "FIXTURE_SETUP_FRAGMENT": "b" * 64,
             "MODPATH": str(self.staged), "TMPDIR": str(self.scratch),
             "HOME": str(home), "PATH": str(installer_bin),
         }
@@ -128,25 +130,25 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
         self.assertFalse(self.scratch.exists())
         self.assertTrue((self.state / "ssmcp.rc").is_file(), "cleanup removed the module configuration")
 
-    def test_first_install_cleanup_and_explicit_onboarding(self):
+    def test_first_install_opens_chat_and_explicit_onboarding_uses_device_credential(self):
         self.install()
         self.assertEqual((self.state / "ssmcp.rc").read_text(), self.template)
         self.assertTrue(self.owner.is_file())
         self.assertEqual(len(self.opened.read_text().splitlines()), 1)
         self.staged.rename(self.active)
         self.shell(self.active / "onboarding/open.sh")
-        urls = [urlsplit(url) for url in self.opened.read_text().splitlines()]
-        self.assertEqual([url.path for url in urls], ["/setup", "/setup"])
-        for url in urls:
-            self.assertEqual((url.scheme, url.netloc, url.fragment),
-                             ("http", "127.0.0.1:42387", self.environment["FIXTURE_FRAGMENT"]))
+        self.assertEqual(self.opened.read_text().splitlines(), [
+            "http://127.0.0.1:42387/#" + self.environment["FIXTURE_FRAGMENT"],
+            "http://127.0.0.1:42387/setup#" + self.environment["FIXTURE_SETUP_FRAGMENT"],
+        ])
+        self.assertFalse((self.state / "root-consent-v1").exists())
         self.assertEqual(len(self.starts.read_text().splitlines()), 1)
         self.assertEqual(self.keys_read.read_text(), "")
 
-    def test_webui_launch_selects_gui_only_for_confirmed_target(self):
+    def test_daily_launch_opens_chat_regardless_of_device_consent(self):
         self.staged.rename(self.active)
         self.shell(self.active / "open.sh")
-        self.assertEqual(urlsplit(self.opened.read_text().strip()).path, "/setup")
+        self.assertEqual(urlsplit(self.opened.read_text().strip()).fragment, self.environment["FIXTURE_FRAGMENT"])
         (self.state / "root-consent-v1").write_text("test@example.invalid")
         self.shell(self.active / "open.sh")
         url = urlsplit(self.opened.read_text().splitlines()[-1])
@@ -155,8 +157,27 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
         self.assertEqual((self.state / "sessions").stat().st_mode & 0o777, 0o700)
         (self.state / "ssmcp.rc").write_text("ssmcp other@example.invalid", encoding="utf-8")
         self.shell(self.active / "open.sh")
-        self.assertEqual(urlsplit(self.opened.read_text().splitlines()[-1]).path, "/setup")
+        self.assertEqual(urlsplit(self.opened.read_text().splitlines()[-1]).fragment, self.environment["FIXTURE_FRAGMENT"])
         self.assertEqual(len(self.starts.read_text().splitlines()), 1)
+
+    def test_chat_only_update_and_reboot(self):
+        self.install()
+        self.staged.rename(self.active)
+        shutil.copytree(self.active, self.staged)
+        self.opened.write_text("")
+        starts = self.starts.read_bytes()
+        self.install()
+        self.assertEqual(self.opened.read_text(), "")
+        self.assertEqual(self.starts.read_bytes(), starts)
+        self.owner.unlink()
+        self.shell(self.active / "service.sh")
+        self.wait_for_console()
+        self.assertEqual(self.opened.read_text(), "")
+        self.shell(self.active / "action.sh")
+        self.assertEqual(self.opened.read_text().splitlines(),
+                         ["http://127.0.0.1:42387/#" + self.environment["FIXTURE_FRAGMENT"]])
+        self.assertFalse((self.state / "root-consent-v1").exists())
+        self.assertEqual((self.state / "ssmcp.rc").read_text(), self.template)
 
     def test_disabled_or_removed_module_does_not_launch(self):
         self.staged.rename(self.active)
@@ -181,11 +202,20 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
             with self.assertRaises(subprocess.CalledProcessError):
                 self.shell("-c", 'MODDIR=$1; . "$MODDIR/launch.sh"; read_console_url', "check", self.active)
 
-    def test_action_default_opens_workbench_or_setup(self):
+    def test_setup_requires_its_own_pairing_file(self):
+        self.install()
+        self.staged.rename(self.active)
+        setup = self.state / "setup.url"
+        setup.write_bytes(self.owner.read_bytes())
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.shell(self.active / "onboarding/open.sh")
+        self.assertEqual(len(self.opened.read_text().splitlines()), 1)
+
+    def test_action_default_opens_workbench(self):
         self.staged.rename(self.active)
         self.events.write_text("/dev/input/event1: EV_KEY KEY_VOLUMEDOWN DOWN\n")
         self.shell(self.active / "action.sh")
-        self.assertEqual(urlsplit(self.opened.read_text().strip()).path, "/setup")
+        self.assertEqual(urlsplit(self.opened.read_text().strip()).fragment, self.environment["FIXTURE_FRAGMENT"])
 
     def test_boot_and_legacy_action_start_without_menu_or_browser(self):
         self.staged.rename(self.active)
@@ -202,32 +232,13 @@ printf '%s\\n' "$5" >> "$FIXTURE/opened"
                 self.assertEqual(self.opened.read_text(), "")
                 self.assertEqual(self.keys_read.read_text(), "")
 
-    def test_volume_menu_status_start_exit_and_timeout(self):
+    def test_module_action_opens_immediately_without_reading_volume_keys(self):
         self.staged.rename(self.active)
-        up = "EV_KEY KEY_VOLUMEUP DOWN"
-        down = "EV_KEY KEY_VOLUMEDOWN DOWN"
-
-        def action(*events):
-            self.events.write_text("".join(f"/dev/input/event1: {event}\n" for event in events))
-            output = self.shell(self.active / "action.sh")
-            self.assertNotIn("KEY_", output)
-            self.assertEqual(self.opened.read_text(), "")
-            self.assertEqual(list((self.root / "data/local/tmp").iterdir()), [])
-            return output
-
-        self.assertIn("本机服务未运行", action("EV_KEY KEY_VOLUMEUP UP",
-                                         "EV_KEY KEY_VOLUMEUP REPEAT", "EV_KEY KEY_A DOWN", up, down))
-        self.assertEqual(self.starts.read_text(), "")
-        self.assertIn("已请求启动本机服务", action(up, up, down))
-        self.wait_for_console()
-        owner = self.owner.read_bytes()
-        starts = self.starts.read_bytes()
-        self.assertIn("本机服务已运行", action(up, down))
-        self.assertIn("本机服务已运行", action(up, up, down))
-        self.assertIn("当前选择：退出", action(up, up, up, down))
-        self.assertNotIn("本机服务", action())
-        self.assertEqual(self.owner.read_bytes(), owner)
-        self.assertEqual(self.starts.read_bytes(), starts)
+        self.shell(self.active / "action.sh")
+        self.shell(self.active / "action.sh")
+        self.assertEqual(len(self.opened.read_text().splitlines()), 2)
+        self.assertEqual(len(self.starts.read_text().splitlines()), 1)
+        self.assertEqual(self.keys_read.read_text(), "")
 
     def test_initialized_update_preserves_active_service(self):
         self.install()

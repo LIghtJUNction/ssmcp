@@ -1,6 +1,6 @@
 # Worker sessions
 
-`ssmcp --worker 3` keeps the current window as the main chat and opens a second window with three worker slots. Use the main window to talk to the coordinating agent; use the worker window to follow reported agent progress and inspect task states. Logs and client resource details are available with F2. Each window has its own client connection and operating-system process.
+`ssmcp alice@relay.example --worker 3` keeps the current window as the main chat and opens a second window with three worker slots. Use the main window to talk to the coordinating agent; use the worker window to follow reported agent progress and inspect task states. Logs and client resource details are available with F2. Each window has its own client connection and operating-system process.
 
 The default worker is an external agent. It actively connects to the worker window, registers with `role: "worker"`, and calls `ssmcp.worker.wait` to wait for a task. After executing an assigned task, it reports the result with `ssmcp.worker.complete` and waits again. Starting the pool creates task capacity without starting any model.
 
@@ -72,7 +72,7 @@ worker to be idle.
 Start the main chat and its worker window with one command:
 
 ```sh
-ssmcp --worker 3
+ssmcp alice@relay.example --worker 3
 ssmcp alice@relay.example --worker 10
 ```
 
@@ -83,7 +83,7 @@ The same external-worker workflow applies on Linux, macOS and Windows. Each work
 The foreground command needs an available terminal adapter for its second window. To select a terminal explicitly, set `SSMCP_WORKER_TERMINAL` to one executable path. The value is a literal path, including any spaces; it is not a shell command or a list of options.
 
 ```sh
-SSMCP_WORKER_TERMINAL=/absolute/path/to/xterm ssmcp --worker 3
+SSMCP_WORKER_TERMINAL=/absolute/path/to/xterm ssmcp alice@relay.example --worker 3
 ```
 
 The child receives the original working directory and arguments as separate values. Startup waits for the actual worker process and its connection to become ready. A terminal launcher's successful exit alone does not establish readiness. An unavailable terminal or failed child startup produces an explicit error.
@@ -101,19 +101,24 @@ Use these commands in the main chat:
 | `/worker ls` | Show the linked pool's actual stations and registered workers. |
 | `/worker +N` | Add `N` offline stations. |
 | `/worker -N` | Request removal of `N` stations, starting with offline and idle stations. |
+| `/worker retire #03` | Select station #03 for retirement. Repeat the command locally after its confirmation prompt to force that station offline. |
 
 Invitation text appears in a local, scrollable panel, and the client also tries to copy it to the clipboard. A missing clipboard does not prevent reading the prompt. When the pool is fully staffed, `/invite worker` displays `Worker stations are fully staffed.` and does not generate another invitation. Sending a prompt to an external agent does not itself connect that agent or start a model.
 
+In an attached Workers terminal, type `/worker -1` or `/worker +1` and press Enter to adjust capacity through the main terminal. Esc cancels the draft. Only locally typed capacity commands use this control. The main terminal reports the accepted target and each change in retirement progress.
+
 Shrinking a pool preserves in-flight claims and cancellation acknowledgements. A station being removed while its task is still running remains **working**. Once it has no running task but still awaits retirement confirmation, it is **retiring**. The physical station count is `idle + working + offline + retiring`; `desired_total` describes the requested capacity while retirement is pending.
 
-Capacity can range from zero to 128 stations. While a resize is awaiting retirement acknowledgements, only a repeat of the same target is accepted. The parent projection's `last_resize` identifies the actual request, target, acceptance and any error; sending a window-control message alone does not prove that the pool accepted it. A pool with zero stations remains connected and can grow again.
+To remove a worker that can no longer acknowledge retirement, enter `/worker retire #03` in the main terminal, substituting the number shown in the worker window. Read the station and task in the prompt. If that worker remains stuck, enter the same command again. The pool records any unconfirmed task as `unknown` with `replay_safe: false`. Other stations keep their claims. A normal release before confirmation preserves the recorded result. The pool cannot stop work that the external agent may still be doing.
+
+Capacity can range from zero to 128 stations. While a count-based resize is awaiting retirement acknowledgements, only a repeat of the same target is accepted for that resize. The parent projection's `last_resize` identifies the actual request, target, acceptance and any error; sending a window-control message alone does not prove that the pool accepted it. A pool with zero stations remains connected and can grow again.
 
 ## Connect the external workers
 
 A worker is an external agent that actively joins the worker connection and waits for a task. Keep each agent's existing conversation open while it waits. SSMCP supplies the task queue and tools; the external application supplies the model.
 
 1. Connect the main window. Enter `/invite` and press Enter, then paste the prompt into the authorized coordinator conversation. The coordinator joins the control session as `main` and binds with its own credentials.
-2. Start the linked pool with `ssmcp --worker 3` or open stations with `/worker +N` in the main window. Check for a connected pool and a free station with `/worker ls`. In the main window, enter `/invite worker` and press Enter. Paste the prompt into each separate authorized worker conversation.
+2. Start the linked pool with `ssmcp alice@relay.example --worker 3` or open stations with `/worker +N` in the main window. Check for a connected pool and a free station with `/worker ls`. In the main window, enter `/invite worker` and press Enter. Paste the prompt into each separate authorized worker conversation.
 3. Each worker joins the linked pool as `worker`, binds with its own private credentials, and calls `ssmcp.worker.wait`. A wait timeout leaves it available. The worker calls wait again.
 4. The main agent submits tasks. A waiting worker receives one authenticated claim, performs the task, and reports it with `ssmcp.worker.complete`. After completion, it requests another task with a new wait request ID.
 
@@ -171,6 +176,7 @@ Press F2 to open the selected station's logs and client resource details. Wide t
 | Left / Right or Tab / Shift+Tab | Select the previous or next worker. |
 | F2 | Switch the selected worker between progress and logs / client resource details. |
 | F1 | Open or close the monitor help page. |
+| `/worker +N` or `/worker -N`, then Enter | Request a capacity change from the attached main terminal. |
 | T | Open or close the full task, including complete task and manager IDs. |
 | Enter | From progress, open logs with command text expanded; in log details, expand or compact command arguments. |
 | Esc | Close help or the current task / log detail view. |
@@ -308,11 +314,11 @@ done
 
 ## Member tool activity
 
-The Sessions recipient row and the selected worker display the number of attributable tool requests admitted for that member during the past ten minutes. The relay uses a monotonic clock and groups requests by millisecond. A newly joined member may show zero while the observation window fills. One full quiet interval enables an Offline activity label. A subsequent call clears it. A client that has no measured value leaves the count blank.
+The Sessions recipient row and the selected worker display the number of attributable tool requests admitted for that member during the past ten minutes. The relay uses a monotonic clock and groups requests by millisecond. A newly joined member may show zero while the observation window fills. After ten full minutes without a call, the Sessions row shows Offline activity and the worker monitor lists the station number as quiet. A subsequent call clears that activity marker. A client that has no measured value leaves the count blank.
 
 One user-issued bound native tool or catalog call, client-scoped resource read, explicit collaboration action, authenticated event or messaging request, or typed await counts once on its connection. Explicit UI waits count once as well. An await covering several targets counts once, including when the relay repeats a native observation in the background. An explicit new read of a retained wait counts as a new call. Automatic probes produce no count. Server-wide discoveries, account-owned jobs, and multi-connection transfers do not select one verified member on one connection. A member's signed-in account and display name cannot establish attribution.
 
-This display concerns tool use. A registered member can work outside the relay for ten minutes and keep a valid task claim. Native station counts, cancellation, retirement acknowledgement, Dreaming approval and retained results follow their existing protocols.
+This display concerns tool use. A registered member can work outside the relay for ten minutes and keep a valid task claim. The worker monitor counts Offline from scheduler station state and shows registrations against current capacity. During a shrink, an occupied station stays Working until the worker reports the outcome of its active claim. The target shows the requested capacity while retirement is pending.
 
 ## Share work between occupied and idle stations
 
@@ -490,7 +496,7 @@ return await call(id, "ssmcp.worker.report", {
 
 The tool also accepts `command_start` and `command_end` events for commands an external worker actually observes. Command text is limited to 4096 bytes; progress and detail are limited to 1024 bytes. Use the event's fields from the discovered schema. Repeating a retained request ID with identical content is idempotent; changed content, another caller or a stale claim is rejected. A progress report does not complete the task.
 
-When a station is selected for removal, its original worker receives a retirement receipt through `worker.wait`. Keep that object unchanged. `worker.release` refuses an active claim and only removes the station after the owning worker acknowledges retirement. Repeating an already accepted release is safe while its receipt is retained. The worker can then leave its collaboration membership and stop waiting; no external model or operating-system process is forcibly terminated by this acknowledgement.
+For cooperative removal, the original worker receives a retirement receipt through `worker.wait`. Keep that object unchanged. `worker.release` refuses an active claim and only removes the station after the owning worker acknowledges retirement. Repeating an already accepted release is safe while its receipt is retained. The worker can then leave its collaboration membership and stop waiting; no external model or operating-system process is forcibly terminated by this acknowledgement.
 
 A closed connection between the worker client and its relay makes unconfirmed assigned work `unknown`; do not replay it automatically. An agent that goes silent has not confirmed completion or cancellation. Its in-flight task continues to occupy its station until the task's lifecycle resolves; an idle-status display must not be used as evidence that external effects have stopped.
 

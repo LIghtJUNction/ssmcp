@@ -27,6 +27,78 @@ fn key() -> String {
     bytes.extend_from_slice(&[1; 32]);
     format!("ssh-ed25519 {} device", STANDARD.encode(bytes))
 }
+#[tokio::test]
+#[ignore = "requires Node, OpenSSL and Playwright Chromium with CDP virtual WebAuthn"]
+async fn chromium_passkey_signs_back_into_the_same_github_account() {
+    use crate::identity::{GitHubConfig, IdentityProviders};
+    use tokio::{net::TcpListener, process::Command};
+
+    let tls = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let public = format!("https://localhost:{}", tls.local_addr().unwrap().port());
+    let tmp = Temp::new();
+    let mut broker = Broker::new(public.clone());
+    broker.identities = IdentityProviders::with_github_test_endpoints(
+        &public,
+        GitHubConfig {
+            client_id: "fixture".into(),
+            client_secret: "fixture".into(),
+        },
+        "http://127.0.0.1:9",
+    )
+    .unwrap();
+    broker.portal = Portal::open(&tmp.0).unwrap();
+    // Only bootstrap the already signed-in GitHub fixture account. All passkey
+    // requests, cookie rotations, logout and account reads use the real HTTP router.
+    let (initial, _) = persisted_test_login(&broker.portal).await;
+    let broker = Arc::new(broker);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let router = crate::http::router(broker.clone());
+    let (stop, shutdown) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(async {
+                let _ = shutdown.await;
+            })
+            .await
+            .unwrap()
+    });
+    let result = Command::new("node")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .arg("scripts/test_portal_passkeys_live.mjs")
+        .stdin(std::process::Stdio::from(std::os::fd::OwnedFd::from(
+            tls.into_std().unwrap(),
+        )))
+        .env("PASSKEY_TEST_ORIGIN", public)
+        .env("PASSKEY_TEST_LOOPBACK", base)
+        .env("PASSKEY_TEST_COOKIE", &initial)
+        .kill_on_drop(true)
+        .status()
+        .await;
+    let _ = stop.send(());
+    server.await.unwrap();
+    assert!(result.unwrap().success(), "Chromium passkey flow failed");
+    assert!(
+        broker
+            .portal
+            .session(&persisted_test_headers(&initial))
+            .is_err()
+    );
+    let browser = broker.portal.browser.lock().unwrap();
+    assert_eq!(
+        browser
+            .sessions
+            .values()
+            .filter(|s| s.subject.as_deref() == Some("123"))
+            .count(),
+        1
+    );
+    drop(browser);
+    drop(broker);
+    let reopened = store::Store::open(&tmp.0).unwrap();
+    assert_eq!(reopened.passkeys_for("123").unwrap().len(), 1);
+}
+
 #[test]
 fn key_parser_rejects_options_private_keys_wrong_algorithms_lengths_and_controls() {
     let expected = parse_key(&key(), "laptop").unwrap();

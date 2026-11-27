@@ -770,6 +770,7 @@ mod tests {
                 attached_at_ms: 1,
             }),
             manager_operations: Vec::new(),
+            productivity: None,
             stopping: false,
             total: 2,
             idle: 1,

@@ -52,7 +52,7 @@ impl Asset {
     }
 }
 
-static ASSETS: LazyLock<[Asset; 7]> = LazyLock::new(|| {
+static ASSETS: LazyLock<[Asset; 8]> = LazyLock::new(|| {
     [
         Asset::new(
             "favicon.svg",
@@ -83,6 +83,11 @@ static ASSETS: LazyLock<[Asset; 7]> = LazyLock::new(|| {
             "client-install-copy.js",
             "text/javascript; charset=utf-8",
             include_bytes!("client-install-copy.js"),
+        ),
+        Asset::new(
+            "portal.js",
+            "text/javascript; charset=utf-8",
+            include_bytes!("portal.js"),
         ),
         Asset::new(
             "copy-command.js",

@@ -95,6 +95,10 @@ impl MonthlyLedger {
         })
     }
 
+    pub(in crate::portal) fn has_recharged(&self, id: &str) -> bool {
+        self.paid.contains(id)
+    }
+
     pub(in crate::portal) fn snapshot(&self, id: &str) -> Result<TrafficQuota, Problem> {
         let period = traffic_period_at(crate::management::now(), self.offset);
         self.store.traffic.snapshot(

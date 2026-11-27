@@ -149,7 +149,7 @@ else:
             if error and error.lower() not in combined.lower():
                 raise AssertionError("missing installer diagnostic: " + error + "\n" + combined)
             if success and windows:
-                expected = "ssmcp --username USERNAME --server https://ssmcp.lmm.best"
+                expected = "ssmcp USERNAME@ssmcp.lmm.best"
                 if expected not in [line.strip() for line in result.stdout.splitlines()]:
                     raise AssertionError("missing Windows account connection command:\n" + combined)
 

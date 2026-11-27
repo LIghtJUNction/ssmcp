@@ -30,7 +30,8 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 .I relay provider subject
 .PP
 .B ssmcp
-.RB [ \-\-server " https://origin" ]
+.I username@server
+.RB [ \-\-tui | \-\-webui | \-\-gui ]
 .RB [ \-\-name " name" ]
 .RB [ \-\-title " title" ]
 .RB [ \-\-no-watchdog ]
@@ -43,8 +44,9 @@ ssmcp \- connect devices and control authorized terminals through an MCP gateway
 ssmcp provides a local shell, managed command jobs and file tools.
 Run ssmcp username@server to connect over HTTPS and WSS. The device selects
 a registered relay account without logging in. The controlling MCP client
-authorizes independently. Bare ssmcp reuses the last successful foreground
-connection target. Each live connection has a new client ID.
+authorizes independently. Bare ssmcp prints usage and exits. The default frontend is the TUI.
+Use ssmcp webui or ssmcp gui to open the connection form.
+Each live connection has a new client ID.
 .PP
 On Linux, ssmcp local serves MCP on loopback. Open /logs in the SSMCP window
 for its URL and one-time authorization code. Add the URL to your MCP client,
@@ -637,11 +639,11 @@ output thresholds.
 ssmcp alice@ssmcp.example.com --name laptop
 ssmcp whoami alice@ssmcp.example.com --json
 ssmcp local
-ssmcp --name laptop
+ssmcp alice@ssmcp.example.com --gui
 ssmcp list
 ssmcp attach saved:dev
 ssmcp controllers history --json
-ssmcp --no-watchdog --name one-attempt
+ssmcp alice@ssmcp.example.com --no-watchdog --name one-attempt
 ssmcp --list-tools
 .fi
 .PP
@@ -832,7 +834,12 @@ Home/End. F2 cycles activity, audit, agents, queue, questions and history.
 syntax-highlighted source, and Left returns to the list. Source audit uses the
 same current protocol 7; older protocol connections are no longer accepted.
 .SS "Context handoff"
-Use /handoff [note] to prepare a bounded Markdown snapshot of the current
+Use /handoff [note] to ask the selected session agent for a standalone
+handoff prompt. The agent calls ssmcp.ui.handoff to copy its prompt to the
+local clipboard. When the terminal confirms the copy, paste the prompt into
+the next agent.
+.PP
+Use /handoff-export [note] to prepare a bounded Markdown snapshot of the current
 conversation, pending requests and questions. It is saved privately as
 \&.ssmcp/inputs/handoff-*.md and inserted as an editable @file draft.
 The current recipient is retained; no requirement is automatically sent,

@@ -18,6 +18,7 @@ struct Counts {
     commands: AtomicUsize,
     reads: AtomicUsize,
     close_failures: AtomicUsize,
+    online_limit: AtomicBool,
 }
 struct FixtureHost {
     counts: Arc<Counts>,
@@ -28,6 +29,20 @@ struct FixtureCore {
     closed: AtomicBool,
 }
 impl Host for FixtureHost {
+    fn relay_refusal(&self, session: &str, _settle: bool) -> CoreFuture<'_, Option<RelayRefusal>> {
+        let refused = session == "fixture" && self.counts.online_limit.load(Ordering::Acquire);
+        Box::pin(async move {
+            Ok(refused.then(|| {
+                RelayRefusal::from_destination(
+                    RelayAdmissionDenial::OnlineSessionLimit,
+                    "alice@relay.example",
+                    Effect::MayHaveOccurred,
+                )
+                .unwrap()
+            }))
+        })
+    }
+
     fn sessions(&self) -> CoreFuture<'_, Vec<Value>> {
         Box::pin(async {
             Ok(vec![
@@ -173,6 +188,10 @@ struct Server {
 }
 impl Server {
     async fn new(assets: Option<PathBuf>) -> Self {
+        Self::with_launch_refusal(assets, None).await
+    }
+
+    async fn with_launch_refusal(assets: Option<PathBuf>, reason: Option<RelayRefusal>) -> Self {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
@@ -188,6 +207,11 @@ impl Server {
             }),
         )
         .unwrap();
+        let app = if let Some(reason) = reason {
+            app.layer(axum::Extension(reason))
+        } else {
+            app
+        };
         let task = tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
@@ -299,6 +323,88 @@ async fn http_requires_pairing_and_exact_origin_before_accessing_core() {
         assert!(page["sessions"][0].get(private).is_none());
     }
     assert_eq!(server.counts.opens.load(Ordering::Relaxed), 0);
+}
+
+#[tokio::test]
+async fn paired_startup_refusal_opens_setup_and_reads_the_original_result_without_launch() {
+    let mut url = reqwest::Url::parse("http://127.0.0.1:1234").unwrap();
+    let reason = RelayRefusal::from_destination(
+        RelayAdmissionDenial::TrafficQuotaExceeded,
+        "alice@relay.example",
+        Effect::MayHaveOccurred,
+    )
+    .unwrap();
+    let reason =
+        super::super::launch_parameters(&mut url, Err(CreationError::Relay(reason))).unwrap();
+    assert_eq!(url.query(), Some("setup=1&launch_refused=1"));
+    let server = Server::with_launch_refusal(None, reason).await;
+    let unpaired = http()
+        .get(format!("{}{PREFIX}/launch", server.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unpaired.status(), StatusCode::UNAUTHORIZED);
+    for _ in 0..2 {
+        let result = server
+            .request(reqwest::Method::GET, "/launch")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(result.status(), StatusCode::PAYMENT_REQUIRED);
+        let body: Value = result.json().await.unwrap();
+        assert_eq!(body["error"]["effect"], "may_have_occurred");
+        assert_eq!(body["error"]["code"], "traffic_quota_exceeded");
+        assert_eq!(body["error"]["relay_origin"], "https://relay.example");
+    }
+    assert_eq!(server.counts.opens.load(Ordering::Relaxed), 0);
+    let ready = Server::new(None).await;
+    let result: Value = ready
+        .request(reqwest::Method::GET, "/launch")
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(result["status"], "ready");
+}
+
+#[tokio::test]
+async fn registered_online_limit_reaches_open_events_and_bridge_without_replaying() {
+    let server = Server::new(None).await;
+    let opened = server.open("original", false).await;
+    let id = opened["connection_id"].as_str().unwrap();
+    server.counts.online_limit.store(true, Ordering::Release);
+    for (path, input) in [
+        (
+            "/connections".into(),
+            json!({"request_id":"original","session":"fixture","read_only":false}),
+        ),
+        (
+            format!("/connections/{id}/events"),
+            json!({"request_id":"observe","generation":"fixture-core","wait_ms":0}),
+        ),
+        (
+            format!("/connections/{id}/bridge"),
+            json!({"version":1,"id":"caps","operation":{"op":"capabilities"}}),
+        ),
+    ] {
+        let response = server
+            .request(reqwest::Method::POST, &path)
+            .json(&input)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+        let body: Value = response.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "online_session_limit");
+        assert_eq!(body["error"]["effect"], "may_have_occurred");
+        assert_eq!(body["error"]["relay_origin"], "https://relay.example");
+    }
+    assert_eq!(server.counts.opens.load(Ordering::Relaxed), 1);
+    assert_eq!(server.counts.commands.load(Ordering::Relaxed), 0);
 }
 
 #[tokio::test]
@@ -434,6 +540,7 @@ async fn closing_a_long_lived_connection_keeps_its_open_retry_receipt() {
         host: Arc::new(FixtureHost {
             counts: counts.clone(),
         }),
+        creations: Mutex::new(Vec::new()),
         next_connection: AtomicU64::new(2),
         requests: Semaphore::new(32),
         data: Mutex::new(Data {
@@ -499,6 +606,7 @@ async fn idle_expiry_preserves_an_unconfirmed_release_and_its_retry_receipt() {
         host: Arc::new(FixtureHost {
             counts: counts.clone(),
         }),
+        creations: Mutex::new(Vec::new()),
         next_connection: AtomicU64::new(2),
         requests: Semaphore::new(32),
         data: Mutex::new(Data {
@@ -754,4 +862,167 @@ async fn public_assets_cannot_escape_their_directory_or_expose_pairing_json() {
     }
     drop(server);
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+struct CreationHost {
+    count: AtomicUsize,
+    dir: PathBuf,
+}
+impl Host for CreationHost {
+    fn receipt_directory(&self) -> Option<&std::path::Path> {
+        Some(&self.dir)
+    }
+    fn authorize_creation(&self, _: &str) -> Result<(), BridgeError> {
+        Ok(())
+    }
+    fn create(&self, destination: String) -> CoreFuture<'_, String, CreationError> {
+        Box::pin(async move {
+            let n = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+            if destination == "quota@relay.test" {
+                return Err(CreationError::Relay(
+                    RelayRefusal::from_destination(
+                        RelayAdmissionDenial::TrafficQuotaExceeded,
+                        &destination,
+                        zbridge::Effect::None,
+                    )
+                    .unwrap(),
+                ));
+            }
+            if n == 1 {
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+            Ok(format!("live:{n:032x}"))
+        })
+    }
+    fn sessions(&self) -> CoreFuture<'_, Vec<Value>> {
+        Box::pin(async { Ok(vec![]) })
+    }
+    fn connect(&self, _: String, _: bool) -> CoreFuture<'_, Arc<dyn Connection>> {
+        Box::pin(async { Err(unavailable("fixture has no native endpoint")) })
+    }
+}
+#[tokio::test]
+async fn creation_requires_pairing_and_consent_and_deduplicates_concurrent_and_old_requests() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let dir = std::env::temp_dir().join(crate::session::random_suffix().unwrap());
+    crate::platform::private_directory(&dir).unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let host = Arc::new(CreationHost {
+        count: AtomicUsize::new(0),
+        dir: dir.clone(),
+    });
+    let app = router(
+        Config {
+            token: TOKEN.into(),
+            origin: url.clone(),
+            assets: None,
+        },
+        host.clone(),
+    )
+    .unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let client = http();
+    let uri = format!("{url}{PREFIX}/owned-sessions");
+    let create = |id: &str, d: &str| {
+        client
+            .post(&uri)
+            .bearer_auth(TOKEN)
+            .json(&json!({"request_id":id,"destination":d,"terms":false,"privacy":false}))
+            .send()
+    };
+    assert_eq!(
+        client
+            .post(&uri)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        client
+            .post(&uri)
+            .bearer_auth(TOKEN)
+            .header("Origin", "https://wrong.test")
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        create("no-consent", "alice@ssmcp.lmm.best")
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let (a, b) = tokio::join!(
+        create("same", "alice@relay.test"),
+        create("same", "alice@relay.test")
+    );
+    let a: Value = a.unwrap().error_for_status().unwrap().json().await.unwrap();
+    let b: Value = b.unwrap().error_for_status().unwrap().json().await.unwrap();
+    assert_eq!(a, b);
+    assert_eq!(
+        a,
+        json!({"request_id":"same","session":"live:00000000000000000000000000000001"})
+    );
+    assert_eq!(
+        create("same", "other@relay.test").await.unwrap().status(),
+        StatusCode::CONFLICT
+    );
+    // More than a complete in-memory receipt window can pass without replaying the old request.
+    for n in 0..MAX_OPEN_RECEIPTS + 2 {
+        let row: Value = create(&format!("req-{n}"), "alice@relay.test")
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_ne!(a["session"], row["session"]);
+    }
+    let replay: Value = create("same", "alice@relay.test")
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(replay, a);
+    assert_eq!(host.count.load(Ordering::SeqCst), MAX_OPEN_RECEIPTS + 3);
+    for _ in 0..2 {
+        let rejected = create("quota", "quota@relay.test").await.unwrap();
+        assert_eq!(rejected.status(), StatusCode::PAYMENT_REQUIRED);
+        let body: Value = rejected.json().await.unwrap();
+        assert_eq!(body["error"]["code"], "traffic_quota_exceeded");
+        assert_eq!(body["error"]["relay_origin"], "https://relay.test");
+        assert_eq!(body["error"]["effect"], "none");
+    }
+    // Same request reads the original persisted refusal without another launch.
+    assert_eq!(host.count.load(Ordering::SeqCst), MAX_OPEN_RECEIPTS + 4);
+    let legacy = BridgeError::new(ErrorCode::Unavailable, "old receipt").uncertain();
+    let decoded: CreationError = serde_json::from_value(json!(&legacy)).unwrap();
+    assert!(matches!(decoded, CreationError::Bridge(error) if error == legacy));
+    server.abort();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+#[tokio::test]
+async fn attach_gateway_rejects_owned_creation() {
+    let server = Server::new(None).await;
+    let r = server
+        .request(reqwest::Method::POST, "/owned-sessions")
+        .json(&json!({"request_id":"owned","destination":"alice@relay.test"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
 }

@@ -155,7 +155,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/allow",
-        description: "List session access; /allow USER adds a locally approved controller",
+        description: "List session access; /allow add USER grants access to this session",
     },
     SlashCommand {
         name: "/logs",
@@ -167,7 +167,11 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/new",
-        description: "Add a canvas panel: chat, statistics, audit, queue or questions",
+        description: "Open a new session in the current directory",
+    },
+    SlashCommand {
+        name: "/cd",
+        description: "Change this session’s current directory",
     },
     SlashCommand {
         name: "/close",
@@ -231,7 +235,7 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/worker",
-        description: "List or resize worker stations: /worker ls | +N | -N",
+        description: "Worker stations: ls | +N | -N | retire #NN",
     },
     SlashCommand {
         name: "/track-command",
@@ -239,6 +243,10 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/handoff",
+        description: "Ask the current agent for a handoff prompt and copy it",
+    },
+    SlashCommand {
+        name: "/handoff-export",
         description: "Prepare a context file and editable handoff draft",
     },
 ];
@@ -1136,14 +1144,17 @@ mod tests {
         assert_eq!(draft.text(), "/re");
         draft.set_text("/");
         assert!(draft.move_suggestion(-1));
-        assert_eq!(draft.selected_suggestion().unwrap().name, "/handoff");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/handoff-export");
         assert!(
             draft
                 .rows(60, 3, &ui, true)
                 .lines
                 .iter()
-                .any(|line| line.contains("› /handoff"))
+                .any(|line| line.contains("› /handoff-export"))
         );
+        draft.set_text("/handoff");
+        assert_eq!(draft.selected_suggestion().unwrap().name, "/handoff");
+        draft.set_text("/");
         draft.insert("au");
         assert_eq!(draft.selected_suggestion().unwrap().name, "/audit");
     }

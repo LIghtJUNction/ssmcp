@@ -4359,7 +4359,7 @@ mod tests {
     #[test]
     fn non_terminal_status_errors_keep_complete_diagnostics() {
         for message in [
-            "unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server or ssmcp --server https://server",
+            "unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server",
             "SSH device connections have been removed. Use ssmcp username@server or ssmcp login --server https://server",
         ] {
             for level in ["Error", "Timeout"] {

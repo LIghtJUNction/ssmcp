@@ -173,7 +173,8 @@ pub(super) fn subcommands(command: &str) -> &'static [SlashCommand] {
             "/diff split" => "Show old and new lines side by side",
         },
         "/allow" => commands! {
-            "/allow add" => "USER · add a locally approved controller",
+            "/allow list" => "List users with access to this session",
+            "/allow add" => "USER · grant access to this session",
             "/allow remove" => "USER · revoke this session's access",
         },
         "/new" => commands! {
@@ -217,6 +218,7 @@ pub(super) fn subcommands(command: &str) -> &'static [SlashCommand] {
         },
         "/worker" => commands! {
             "/worker ls" => "List worker stations",
+            "/worker retire" => "#NN · preview retirement of this station, then confirm locally",
             "/worker +" => "N · add 1–128 stations; type the count next",
             "/worker -" => "N · retire 1–128 stations; type the count next",
         },

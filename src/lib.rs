@@ -11,6 +11,7 @@ mod collab;
 #[cfg(unix)]
 mod command_runtime;
 pub mod computer;
+pub mod connection_form;
 pub mod context;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 pub mod desktop_terminal;

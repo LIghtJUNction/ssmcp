@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1080" height="620" viewBox="0 0 1080 620" role="img" aria-labelledby="title desc">
-  <title id="title">ssmcp GitHub login: declare access, connect with SSH, sign in and consent</title>
-  <desc id="desc">Start ssmcp with an allow list of GitHub users. Existing SSH keys and configuration connect the local machine to the server; no GitHub login is needed in the CLI. Add the returned /mcp URL to an MCP client and sign in with GitHub in the browser. On the separate ssmcp consent screen, review the verified identity, MCP client name and callback origin, then explicitly allow that MCP client. Only online sessions whose allow lists match the verified stable GitHub user ID can be discovered and called.</desc>
+  <title id="title">SSMCP device sign-in and session access</title>
+  <desc id="desc">Start the controlled device with your relay account. Check the short code and authorize the device in a browser. Sign in separately through your MCP app. From the device, use /allow add, list, and remove to manage this session.</desc>
   <style>
     text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
     .mono { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; }
@@ -12,32 +12,32 @@
     @media (prefers-reduced-motion: reduce) { .progress { animation: none; stroke-dasharray: none; opacity: .45; } }
   </style>
   <rect width="1080" height="620" rx="20" fill="#0a0d12"/>
-  <text x="48" y="62" fill="#f1f5fb" font-size="34" font-weight="650">SSH connects. GitHub identifies.</text>
-  <text x="48" y="99" class="detail">You choose who can reach each local client.</text>
+  <text x="48" y="62" fill="#f1f5fb" font-size="34" font-weight="650">Sign in on the controlled device</text>
+  <text x="48" y="99" class="detail">Each session starts with a verified relay account.</text>
 
   <path d="M76 166V478" stroke="#2c394c" stroke-width="2"/>
   <path d="M76 166V478" class="progress"/>
   <circle cx="76" cy="166" r="23" fill="#142033" stroke="#3d5473"/>
   <text x="76" y="173" class="number">1</text>
-  <text x="124" y="164" class="step">Choose who may connect</text>
-  <text x="124" y="198" class="detail mono">ssmcp --allow octocat@github my-server</text>
+  <text x="124" y="164" class="step">Start a device session</text>
+  <text x="124" y="198" class="detail mono">ssmcp alice@relay.example</text>
 
   <circle cx="76" cy="270" r="23" fill="#142033" stroke="#3d5473"/>
   <text x="76" y="277" class="number">2</text>
-  <text x="124" y="268" class="step">Connect with your existing SSH key</text>
-  <text x="124" y="302" class="detail">Your SSH config stays in use. The terminal returns the <tspan class="mono">/mcp</tspan> URL.</text>
+  <text x="124" y="268" class="step">Authorize the device in a browser</text>
+  <text x="124" y="302" class="detail">Check the short code, then confirm the account on the relay.</text>
 
   <circle cx="76" cy="374" r="23" fill="#142033" stroke="#3d5473"/>
   <text x="76" y="381" class="number">3</text>
-  <text x="124" y="372" class="step">Sign in with GitHub in the browser</text>
-  <text x="124" y="406" class="detail">Add the URL to your MCP app, then verify your GitHub identity.</text>
+  <text x="124" y="372" class="step">Connect your MCP app</text>
+  <text x="124" y="406" class="detail">Add the relay’s <tspan class="mono">/mcp</tspan> URL and authorize your controller account.</text>
 
   <circle cx="76" cy="478" r="23" fill="#142033" stroke="#3d5473"/>
   <text x="76" y="485" class="number">4</text>
-  <text x="124" y="476" class="step">Approve this MCP client</text>
-  <text x="124" y="510" class="detail">Review identity, client name and callback. Only allowed sessions appear.</text>
+  <text x="124" y="476" class="step">Share the current session</text>
+  <text x="124" y="510" class="detail">Use <tspan class="mono">/allow add bob</tspan> to grant another registered user access.</text>
 
   <path d="M48 547H1032" stroke="#263142"/>
-  <text x="48" y="585" fill="#8bbaff" font-size="19">No GitHub login in the CLI.</text>
-  <text x="532" y="585" fill="#c5d1e1" font-size="19">Each session follows its <tspan class="mono">--allow</tspan> policy.</text>
+  <text x="48" y="585" fill="#8bbaff" font-size="19">View access with /allow list.</text>
+  <text x="532" y="585" fill="#c5d1e1" font-size="19">Revoke access with <tspan class="mono">/allow remove bob</tspan>.</text>
 </svg>

@@ -85,12 +85,14 @@ fn subcommand_hints_cover_literal_parser_branches_without_invented_values() {
         ("/wait ca", "/wait cancel"),
         ("/diff sp", "/diff split"),
         ("/allow re", "/allow remove"),
+        ("/allow li", "/allow list"),
         ("/new con", "/new conversation"),
         ("/filter --e", "/filter --errors"),
         ("/theme cod", "/theme codex-dark"),
         ("/group ret", "/group retry"),
         ("/paste-retry di", "/paste-retry discard"),
         ("/invite wo", "/invite worker"),
+        ("/worker ret", "/worker retire"),
     ] {
         let mut composer = draft(prefix);
         let item = composer.selected_suggestion().unwrap();
@@ -100,12 +102,7 @@ fn subcommand_hints_cover_literal_parser_branches_without_invented_values() {
         composer.accept_suggestion().unwrap();
         assert_eq!(composer.text(), format!("{name} "));
     }
-    for text in [
-        "/allow list",
-        "/worker list",
-        "/invite coordinator",
-        "/new logs",
-    ] {
+    for text in ["/worker list", "/invite coordinator", "/new logs"] {
         assert!(draft(text).suggestions().is_empty(), "{text}");
     }
     for item in draft("/theme ").suggestions() {

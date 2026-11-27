@@ -2,7 +2,7 @@
 
 ssmcp keeps conversation messages and events in bounded process memory. A network disconnect and reconnect within the same process preserves retained content. Exiting, restarting, or `/reload` clears it. The client does not create conversation JSONL, archive indexes, or context-memory checkpoints automatically; old files are neither read as runtime state nor deleted by this migration.
 
-Use `ssmcp.ui.events` to read the current event window. Local `/resume`, `/archive`, `/archived`, and `/unarchive`, along with `ssmcp.ui.history`, `ssmcp.ui.history_archive`, and `ssmcp.ui.history_update`, are retired. Explicit `/handoff` export remains available below.
+Use `ssmcp.ui.events` to read the current event window. Local `/resume`, `/archive`, `/archived`, and `/unarchive`, along with `ssmcp.ui.history`, `ssmcp.ui.history_archive`, and `ssmcp.ui.history_update`, are retired. Explicit `/handoff-export` export remains available below.
 
 ## Message receipts and ownership
 
@@ -87,12 +87,16 @@ Each event contains its sequence, bounded text, authenticated source, and retain
 
 [Source attribution and pagination](../src/session/attach/thread_history.rs) · [Process event window](../src/session/attach.rs) · [Client UI](client-ui.md)
 
-## /handoff：准备可编辑的交接上下文
+## /handoff：生成可直接粘贴的交接提示词
 
-`/handoff` 将当前进程仍保留的会话、尚未送达、仍在编辑或等待确认的本地要求队列，以及未回答的问题显式导出为一个 Markdown 文件。`/handoff 附加说明` 会同时保留用户输入的说明，例如：
+在运行客户端的前台终端选择当前 Agent（或 Next caller），输入 `/handoff [附加说明]` 并按 Enter。Agent 根据当前任务生成一份独立的交接提示词，调用 `ssmcp.ui.handoff` 将它复制到运行此客户端的系统剪贴板。终端确认复制成功后，就可以粘贴给下一位 Agent。剪贴板不可用时，Agent 会收到错误，并可在会话中提供原文以供手动复制。每次请求的复制权限有效 30 分钟，成功写入后即失效。
+
+## /handoff-export：准备可编辑的交接上下文
+
+`/handoff-export` 将当前进程仍保留的会话、尚未送达、仍在编辑或等待确认的本地要求队列，以及未回答的问题显式导出为一个 Markdown 文件。`/handoff-export 附加说明` 会同时保留用户输入的说明，例如：
 
 ```text
-/handoff 请先检查输入恢复的边界，再继续处理尚未回答的问题。
+/handoff-export 请先检查输入恢复的边界，再继续处理尚未回答的问题。
 ```
 
 完成后，输入框出现 `@".ssmcp/inputs/handoff-随机ID.md"`。目标 Agent 保持不变；用户可继续编辑和追加要求，再决定是否按 Enter 发送。导出不发送请求、不改变队列送达状态、不回答问题、不调用模型，也不执行或重放旧工具。它按当前记录生成上下文，不推断项目目标或生成模型摘要。

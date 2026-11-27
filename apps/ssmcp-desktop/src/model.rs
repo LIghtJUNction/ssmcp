@@ -197,11 +197,62 @@ pub struct Worker {
     pub slot: u64,
     pub epoch: String,
     pub state: String,
+    pub quiet_10m: Option<bool>,
     pub registered: bool,
     pub task: String,
     pub progress: String,
     pub elapsed: String,
     pub retiring: bool,
+}
+
+impl Worker {
+    pub fn from_wire(value: &Value) -> Result<Self, BridgeError> {
+        let state = text(value, "state", 64);
+        let display = text(value, "display_state", 64);
+        // Earlier bridges reported ten quiet minutes by overwriting the display state.
+        let legacy_quiet = !state.is_empty() && state != "offline" && display == "offline";
+        let task = text(value, "task_summary", 1024);
+        Ok(Self {
+            slot: value["slot"]
+                .as_u64()
+                .ok_or_else(|| BridgeError::invalid("invalid worker slot"))?,
+            epoch: counter(&value["epoch"])?.0.to_string(),
+            state: if state.is_empty() || (state == "idle" && display == "dreaming") {
+                display
+            } else {
+                state
+            },
+            quiet_10m: value["quiet_10m"]
+                .as_bool()
+                .or_else(|| legacy_quiet.then_some(true)),
+            registered: value["registered"] == true,
+            task: if task.is_empty() {
+                text(value, "task_id", 128)
+            } else {
+                task
+            },
+            progress: text(value, "progress", 512),
+            elapsed: if value["current_task_elapsed_ms"].is_null() {
+                String::new()
+            } else {
+                format!("{} ms", counter(&value["current_task_elapsed_ms"])?.0)
+            },
+            retiring: value["retire_requested"] == true,
+        })
+    }
+
+    pub fn station_label(&self) -> String {
+        format!("#{:02}", self.slot.saturating_add(1))
+    }
+
+    pub fn registration_label(&self) -> &'static str {
+        match (self.registered, self.retiring && self.state != "retiring") {
+            (true, true) => "已登记 · 已请求退役",
+            (false, true) => "未登记 · 已请求退役",
+            (true, false) => "已登记",
+            (false, false) => "未登记",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -210,6 +261,8 @@ pub struct Workers {
     pub total: u64,
     pub desired: u64,
     pub registered: u64,
+    pub dreaming: Option<u64>,
+    pub productivity: Option<[u64; 10]>,
     pub working: u64,
     pub idle: u64,
     pub offline: u64,
@@ -229,6 +282,7 @@ pub struct Receipt {
     pub command: Id,
     pub state: ReceiptState,
     pub detail: String,
+    pub new_session: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -294,7 +348,36 @@ impl Receipt {
                             value["status"].as_str(),
                             Some("queued" | "sending" | "delivered")
                         ));
-                if receipt.command != record.command || uncertain || !chat_admitted {
+                let access_list = if receipt.command.as_str() == "session.access" {
+                    serde_json::from_value::<ssmcp::wire::AccessSnapshot>(value.clone())
+                        .ok()
+                        .filter(|snapshot| snapshot.validate().is_ok())
+                        .map(|snapshot| {
+                            snapshot
+                                .entries
+                                .into_iter()
+                                .map(|entry| {
+                                    if entry.owner {
+                                        format!("{}（所有者）", entry.principal)
+                                    } else {
+                                        entry.principal
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join("、")
+                        })
+                } else {
+                    None
+                };
+                let complete = match receipt.command.as_str() {
+                    "session.access" => access_list.is_some(),
+                    "session.new" => value["session"]
+                        .as_str()
+                        .is_some_and(|s| s.starts_with("live:") && s.len() > 5 && s.len() <= 256),
+                    "session.cd" => value["cwd"].as_str().is_some_and(|s| !s.is_empty()),
+                    _ => true,
+                };
+                if receipt.command != record.command || uncertain || !chat_admitted || !complete {
                     (
                         ReceiptState::Unknown,
                         "回执未确认原请求的操作结果。原请求已保留，请核对当前状态。".into(),
@@ -310,7 +393,21 @@ impl Receipt {
                         }
                         "workers.resize" => "收到容量调整回执；当前站位见 Worker 页面。".into(),
                         "terminal.write" => "终端接受写入。命令是否完成请查看终端输出。".into(),
+                        "session.access" => {
+                            format!("当前会话的控制者：{}", access_list.unwrap_or_default())
+                        }
+                        "session.cd" => text(value, "cwd", 2048),
+                        "session.new" => "已新建会话".into(),
                         "terminal.resize" => "收到终端尺寸变更回执。".into(),
+                        "client.update" => {
+                            let summary = text(value, "summary", 2048);
+                            let details = text(value, "details", 4096);
+                            if details.is_empty() {
+                                summary
+                            } else {
+                                format!("{summary}\n{details}")
+                            }
+                        }
                         _ => "收到原请求回执。完成语义由对应操作定义。".into(),
                     };
                     (ReceiptState::Confirmed, detail)
@@ -325,6 +422,14 @@ impl Receipt {
             command: record.command.clone(),
             state,
             detail,
+            new_session: match &record.outcome {
+                CommandOutcome::Receipt(r)
+                    if state == ReceiptState::Confirmed && r.command.as_str() == "session.new" =>
+                {
+                    r.value["session"].as_str().map(str::to_owned)
+                }
+                _ => None,
+            },
         }
     }
 }
@@ -333,6 +438,9 @@ impl Receipt {
 pub struct View {
     pub connection: u64,
     pub sessions: Vec<Session>,
+    pub window_sessions: bool,
+    pub cwd: String,
+    pub launch_error: Option<String>,
     pub sessions_loading: bool,
     pub target: Option<Target>,
     pub phase: Phase,
@@ -364,6 +472,20 @@ pub struct View {
 }
 
 impl View {
+    pub fn has_window_session(&self, target: &Target) -> bool {
+        matches!(target, Target::Named(name) if self.sessions.iter().any(|s| &s.name == name))
+    }
+
+    pub fn remember_window_session(&mut self, target: &str) {
+        if self.window_sessions && !self.sessions.iter().any(|s| s.name == target) {
+            self.sessions.push(Session {
+                name: target.to_owned(),
+                phase: String::new(),
+                connection: String::new(),
+            });
+        }
+    }
+
     pub fn resource(&self, name: &str) -> bool {
         self.phase.connected()
             && self.capabilities.as_ref().is_some_and(|caps| {
@@ -423,6 +545,7 @@ impl View {
         self.generation = None;
         self.cursor = None;
         self.backend_active = false;
+        self.cwd.clear();
         self.agents.clear();
         self.queue.clear();
         self.terminals.clear();
@@ -781,6 +904,53 @@ mod tests {
     use super::*;
 
     #[test]
+    fn native_worker_keeps_state_registration_retirement_and_activity_independent() {
+        let mut slot = json!({"slot": 3, "epoch": "2", "state": "working",
+            "display_state": "working", "quiet_10m": true, "registered": true,
+            "retire_requested": true});
+        let worker = Worker::from_wire(&slot).unwrap();
+        assert_eq!(worker.station_label(), "#04");
+        assert_eq!(worker.state, "working");
+        assert_eq!(worker.quiet_10m, Some(true));
+        assert_eq!(worker.registration_label(), "已登记 · 已请求退役");
+        slot["quiet_10m"] = Value::Null;
+        let worker = Worker::from_wire(&slot).unwrap();
+        assert_eq!(worker.quiet_10m, None);
+
+        slot.as_object_mut().unwrap().remove("quiet_10m");
+        slot["display_state"] = json!("offline");
+        let legacy = Worker::from_wire(&slot).unwrap();
+        assert_eq!(legacy.state, "working");
+        assert_eq!(legacy.quiet_10m, Some(true));
+        slot["quiet_10m"] = json!(false);
+        assert_eq!(Worker::from_wire(&slot).unwrap().quiet_10m, Some(false));
+        slot["quiet_10m"] = Value::Null;
+        slot["state"] = json!("offline");
+        assert_eq!(Worker::from_wire(&slot).unwrap().quiet_10m, None);
+        slot["state"] = json!("idle");
+        slot["display_state"] = json!("dreaming");
+        assert_eq!(Worker::from_wire(&slot).unwrap().state, "dreaming");
+    }
+
+    #[test]
+    fn window_sessions_accept_only_its_own_targets() {
+        let mut view = View::default();
+        let main = "live:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let child = "live:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let other = Target::Named("live:cccccccccccccccccccccccccccccccc".into());
+        view.remember_window_session(main);
+        assert!(view.sessions.is_empty());
+        view.window_sessions = true;
+        for name in [main, child, main] {
+            view.remember_window_session(name);
+            assert!(view.has_window_session(&Target::Named(name.into())));
+        }
+        assert_eq!(view.sessions.len(), 2);
+        assert!(!view.has_window_session(&other));
+        assert!(!view.has_window_session(&Target::Directory("/tmp/foreign".into())));
+    }
+
+    #[test]
     fn decimal_cursors_are_lossless_and_numeric_json_is_rejected() {
         assert_eq!(
             counter(&json!("9007199254740993")).unwrap(),
@@ -951,6 +1121,27 @@ mod receipt_regressions {
     fn chat_value() -> Value {
         json!({"request_id":"send-one","target":"agent-one","confirmation":"local_queue_admission",
             "message_id":"message-one","status":"queued"})
+    }
+
+    #[test]
+    fn only_confirmed_session_access_receipts_display_the_controller_list() {
+        let receipt = |entries| {
+            project(&record(
+                "share",
+                "session.access",
+                json!({"entries":entries}),
+            ))
+        };
+        let list = receipt(json!([
+            {"principal":"owner@relay.test","subject":"1","login":"owner","owner":true},
+            {"principal":"list@relay.test","subject":"2","login":"list","owner":false}
+        ]));
+        assert_eq!(list.state, ReceiptState::Confirmed);
+        assert!(
+            list.detail
+                .contains("owner@relay.test（所有者）、list@relay.test")
+        );
+        assert_eq!(receipt(json!([])).state, ReceiptState::Unknown);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "ssmcp"
-version = "0.10.51"
+version = "0.10.56"
 edition = "2024"
 rust-version = "1.100"
 description = "Connect local tools and remote terminals through authenticated MCP sessions"
@@ -21,7 +21,8 @@ include = [
     "/packaging/ssmcp-web.desktop",
     "/packaging/magisk/src/ssmcp/ssmcp.rc",
     "/packaging/magisk/src/ssmcp/onboarding/**",
-    "/packaging/magisk/src/ssmcp/webroot/**",
+    "/packaging/magisk/assets/**",
+    "/packaging/magisk/src/ssmcp/webroot/index.html",
     "/skills/**",
     "/docs/workspaces.md",
     "/docs/context.md",
@@ -129,6 +130,7 @@ include = [
     "/scripts/test_installer_helpers.ps1",
     "/scripts/install.ps1",
     "/scripts/install.sh",
+    "/scripts/install-ssmcp-termux.sh",
     "/docs/releases.md",
     "/docs/release-notes-*.md",
     "/scripts/e2e.py",
@@ -208,6 +210,10 @@ members = []
 exclude = ["crates/zharness", "crates/zplugin", "crates/ztuio", "crates/zbridge"]
 resolver = "3"
 
+[features]
+# Used only by the debug CLI built specifically for offline loopback integration tests.
+e2e-loopback-ca = []
+
 [dependencies]
 zbridge = { git = "https://github.com/LIghtJUNction/zbridge.git" }
 ztuio = { git = "https://github.com/LIghtJUNction/ztuio.git" }
@@ -253,6 +259,7 @@ tokio = { version = "1.54", features = ["test-util"] }
 mime = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+webauthn-rs = { version = "=0.6.2", default-features = false, features = ["conditional-ui"] }
 time = { version = "0.3.55", default-features = false }
 
 [target.'cfg(unix)'.dependencies]

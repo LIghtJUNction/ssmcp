@@ -38,7 +38,7 @@ class ContextReload(Local):
         self.socket_path = None
 
     def client_command(self, *, name="context-reload", **_kwargs):
-        selector = ["--context", "original"] if self.selection == "command_line" else []
+        selector = ["--context", "original"] if self.selection == "command_line" else ["local"]
         command = [str(self.executable), *selector, "--name", name,
                 "--title", "--context", "--context-root", str(self.extra_root),
                 "--listen", f"127.0.0.1:{self.listen_port}", "--shell", "/bin/sh",

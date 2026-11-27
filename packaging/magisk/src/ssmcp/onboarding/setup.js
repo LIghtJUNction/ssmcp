@@ -1,4 +1,4 @@
-import { api, el, hasCredential, openSessionGui, terminal, usesOfficialRelay } from './device-api.js';
+import { api, el, hasCredential, terminal, usesOfficialRelay } from './device-api.js';
 
 function setView(view) {
   document.body.dataset.view = view;
@@ -11,7 +11,6 @@ function status(message) {
 
 function relayChanged() {
   const server = el('server').value.trim();
-  el('server-display').textContent = server || '未填写';
   el('hosted').hidden = !usesOfficialRelay(server);
 }
 el('server').addEventListener('input', relayChanged);
@@ -22,7 +21,6 @@ async function configure() {
   const server = el('server').value.trim();
   if (!name || !server) {
     status('请填写用户名和服务器域名。');
-    if (name && !server) el('relay-settings').open = true;
     el(name ? 'server' : 'name').focus();
     return;
   }
@@ -45,30 +43,32 @@ async function configure() {
   status('正在检查中继账号…');
   try {
     await api('/setup', request);
-    setView('notice');
-    status('配置已保存，正在读取设备信息…');
-    try { await readConfiguration(); }
-    catch (error) { status(`配置已保存。读取设备信息失败：${error.message} 请刷新此页。`); }
+    showComplete(request.target);
+    await readConfiguration(true);
   } catch (error) {
     if (error.status === 409) {
       try { await readConfiguration(); } catch (readError) { status(readError.message); return; }
       if (document.body.dataset.view === 'complete') return;
     }
-    status(`连接失败：${error.message}`);
+    status(document.body.dataset.view === 'complete' ? `已保存设备配置，账户详情暂时无法读取：${error.message}` : `连接失败：${error.message}`);
   } finally {
     controls.forEach(control => { control.disabled = false; });
   }
 }
-el('connect').onclick = configure;
-el('open-gui').onclick = openSessionGui;
+el('connect').onclick = () => configure();
+
+function showComplete(target, mcp) {
+  el('complete-target').textContent = target;
+  el('complete-mcp').textContent = mcp || '请在中继账户页面查看';
+  el('complete-traffic').hidden = !mcp || !usesOfficialRelay(mcp);
+  setView('complete');
+  status('');
+}
 
 async function readConfiguration(checkCompletionOnly = false) {
   const { target, configured, mcp } = await terminal('list', 0);
   if (target) {
-    el('complete-target').textContent = target;
-    el('complete-mcp').textContent = mcp;
-    el('complete-traffic').hidden = !usesOfficialRelay(mcp);
-    setView('complete');
+    showComplete(target, mcp);
   } else {
     if (checkCompletionOnly) return;
     if (configured) {
@@ -95,5 +95,5 @@ if (hasCredential) {
   readConfiguration().catch(error => status(error.message));
 } else {
   setView('notice');
-  status('请返回模块管理器，打开 SSMCP 的 WebUI，再点「打开安装引导」。');
+  status('请在设备上运行模块的 onboarding/open.sh 重新打开设备设置。');
 }

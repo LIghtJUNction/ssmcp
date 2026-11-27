@@ -102,6 +102,7 @@ impl Fixture {
     async fn attach(&mut self, config: Config, opted_in: bool) -> String {
         let (server, client) = UnixStream::pair().unwrap();
         let peer = DevicePeer {
+            external_user_id: None,
             account: None,
             session_access: true,
             control_attribution: true,
@@ -117,6 +118,7 @@ impl Fixture {
             git_tracking: false,
             repository_events: false,
             worker_activity: false,
+            worker_productivity: false,
             project_continuity: false,
             peer_ports: opted_in && config.auto_candidates.is_none(),
             peer_ports_auto: opted_in && config.auto_candidates.is_some(),

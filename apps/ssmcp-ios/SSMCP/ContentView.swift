@@ -3,7 +3,12 @@ import SwiftUI
 @MainActor struct ContentView: View {
     @ObservedObject var model: ClientModel
     @State private var controlSession: SessionSummary?
+    @State private var destination = ""
+    @State private var terms = false
+    @State private var privacy = false
+    @State private var showsExisting = false
     @State private var selectedTerminal = ""
+    @State private var showingTimeline = false
     @State private var terminalDraft = ""
     @State private var chatDraft = ""
     @State private var rows = "24"
@@ -16,19 +21,26 @@ import SwiftUI
     var body: some View {
         TabView {
             navigation("SSMCP") { sessions }.tabItem { Label("会话", systemImage: "square.stack") }
-            navigation("对话") { chat }.tabItem { Label("对话", systemImage: "bubble.left") }
-            navigation("时间线") { timeline }.tabItem { Label("活动", systemImage: "list.bullet") }
+            navigation("对话") {
+                chat.toolbar { Button { showingTimeline = true } label: { Label("活动", systemImage: "list.bullet") } }
+            }.tabItem { Label("对话", systemImage: "bubble.left") }
             navigation("终端") { terminals }.tabItem { Label("终端", systemImage: "terminal") }
-            navigation("Worker 池") { workers }.tabItem { Label("Workers", systemImage: "square.grid.2x2") }
+            navigation("Workers") { workers }.tabItem { Label("Workers", systemImage: "square.grid.2x2") }
+            navigation("等待与计时") { waits }.tabItem { Label("等待", systemImage: "clock") }
         }
         .tint(Color(red: 0.20, green: 0.36, blue: 0.28))
         .alert("申请独占控制权限？", isPresented: Binding(get: { controlSession != nil }, set: { if !$0 { controlSession = nil } })) {
             Button("取消", role: .cancel) { controlSession = nil }
             Button("申请控制") {
-                if let session = controlSession { Task { await model.open(session.name) } }
+                if let session = controlSession { Task { await model.open(session.target, readOnly: false) } }
                 controlSession = nil
             }
         } message: { Text("终端输入和调整容量仍需每次明确提交。后台会话不会因关闭界面而停止。") }
+        .sheet(isPresented: $showingTimeline) {
+            navigation("活动") {
+                timeline.toolbar { Button("关闭") { showingTimeline = false } }
+            }
+        }
         .sheet(item: $inspectingInput) { input in
             NavigationStack {
                 ScrollView {
@@ -67,21 +79,67 @@ import SwiftUI
                     Button("刷新状态") { Task { await model.refresh() } }.disabled(model.busy)
                     Button("断开连接 · 保持会话运行") { Task { await model.disconnect() } }.disabled(model.busy)
                 }
+            } else if model.hasGateway {
+                Section("在网关上新建会话") {
+                    Text(verbatim: model.origin).font(.caption).foregroundStyle(.secondary)
+                    TextField("用户名@中继地址", text: $destination)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .onChange(of: destination) { _ in terms = false; privacy = false }
+                    if usesOfficialRelay {
+                        Toggle(isOn: $terms) { Text("我同意[用户协议](https://ssmcp.lmm.best/legal/terms)") }
+                        Toggle(isOn: $privacy) { Text("我同意[隐私政策](https://ssmcp.lmm.best/legal/privacy)") }
+                    }
+                    Button("新建并控制会话") {
+                        Task { await model.createSession(destination: destination, terms: terms, privacy: privacy) }
+                    }.disabled(model.busy || destination.isEmpty || (usesOfficialRelay && !(terms && privacy)))
+                    if let owned = model.ownedSession {
+                        Button("重新连接我创建的会话") { Task { await model.open(owned, readOnly: false) } }
+                            .disabled(model.busy)
+                    }
+                }
+                Section {
+                    Button("删除保存的配对", role: .destructive) { model.deletePairing(); showsExisting = false }
+                        .disabled(model.busy)
+                }
             } else {
-                Section("连接到 CLI core") {
+                Section("配对网关") {
                     TextField("https://your-gateway.example", text: $model.origin)
                         .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
                     SecureField("配对令牌", text: $model.token).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    Toggle("只观察", isOn: $model.readOnly)
-                    Button("保存配对并读取会话") { Task { await model.configureAndList() } }.disabled(model.busy)
+                    Button("使用此网关") { model.configure() }.disabled(model.busy)
                     Button("删除保存的配对", role: .destructive) { model.deletePairing() }.disabled(model.busy)
                 }
             }
-            Section("会话") {
-                if model.sessions.isEmpty { Text("连接后显示 core 中真实存在的会话。").foregroundStyle(.secondary) }
+            if let current = model.connection, current.capabilities.can("client.update") {
+                Section("SSMCP 更新") {
+                    Button("检查更新") {
+                        Task { await model.command("client.update", arguments: ["check": true], expectedGeneration: current.capabilities.generation, expectedConnectionID: current.id) }
+                    }.disabled(model.busy)
+                    Button("安装更新") {
+                        Task { await model.command("client.update", arguments: ["check": false], expectedGeneration: current.capabilities.generation, expectedConnectionID: current.id) }
+                    }.disabled(model.busy)
+                    if let text = model.updateResult {
+                        Text(verbatim: text).font(.caption).textSelection(.enabled)
+                    }
+                }
+            }
+            if model.hasGateway && model.connection == nil {
+                existingSessions
+            }
+            Section {
+                Text("使用 HTTPS 与系统证书校验。配对令牌保存在此设备的 Keychain。退到后台只取消观察，不取消任务。").font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var existingSessions: some View {
+        Section {
+            DisclosureGroup("连接已有会话", isExpanded: $showsExisting) {
+                Toggle("只观察", isOn: $model.readOnly)
+                Button("读取已有会话") { Task { await model.listSessions() } }.disabled(model.busy)
                 ForEach(model.sessions) { session in
                     Button {
-                        if model.readOnly { Task { await model.open(session.name) } }
+                        if model.readOnly { Task { await model.open(session.target, readOnly: true) } }
                         else { controlSession = session }
                     } label: {
                         VStack(alignment: .leading, spacing: 8) {
@@ -93,10 +151,16 @@ import SwiftUI
                 }
                 if model.nextSessionOffset != nil { Button("更多会话") { Task { await model.listSessions(more: true) } }.disabled(model.busy) }
             }
-            Section {
-                Text("使用 HTTPS 与系统证书校验。配对令牌保存在此设备的 Keychain。退到后台只取消观察，不取消任务。").font(.footnote).foregroundStyle(.secondary)
-            }
         }
+    }
+
+    private var usesOfficialRelay: Bool {
+        let parts = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return false }
+        let relay = String(parts[1])
+        let host = URLComponents(string: relay.contains("://") ? relay : "https://" + relay)?.host
+        return host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ".")) == "ssmcp.lmm.best"
     }
 
     private var timeline: some View {
@@ -208,6 +272,48 @@ import SwiftUI
         }
     }
 
+    private var waits: some View {
+        Form {
+            if let snapshot = model.timeSnapshot {
+                Section {
+                    Button("刷新状态") { Task { await model.refresh() } }.disabled(model.busy)
+                }
+                waitRows("进行中", snapshot["active"])
+                waitRows("保留的结果", snapshot["recent"])
+                waitRows("定时提示计划", snapshot["prompts"])
+            } else {
+                Text("当前连接尚未提供等待与计时快照。").foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func waitRows(_ heading: String, _ value: Any?) -> some View {
+        let entries = Array(((value as? [JSONObject]) ?? []).prefix(256))
+        return Section(heading) {
+            if entries.isEmpty {
+                Text(value == nil ? "当前连接未提供此项。" : "当前快照没有记录。")
+                    .foregroundStyle(.secondary)
+            }
+            ForEach(entries.indices, id: \.self) { index in
+                let entry = entries[index]
+                let durable = entry["durable"] as? JSONObject
+                let title = entry["label"] as? String ?? entry["id"] as? String ?? "等待"
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(verbatim: title).font(.headline)
+                    if let status = entry["status"] as? String {
+                        LabeledContent("状态", value: status)
+                    }
+                    if let result = durable?["result_status"] as? String {
+                        LabeledContent("结果", value: result)
+                    }
+                    if let state = durable?["state"] as? String {
+                        LabeledContent("读取状态", value: state)
+                    }
+                }
+            }
+        }
+    }
+
     private var workers: some View {
         Form {
             if model.connection?.capabilities.resources.contains("workers") != true {
@@ -216,6 +322,13 @@ import SwiftUI
                 Section("状态") {
                     Text(verbatim: model.workerSummary)
                     Button("刷新状态") { Task { await model.refresh() } }.disabled(model.busy)
+                }
+                if !model.workerProductivity.isEmpty {
+                    Section("Worker 工具调用 / 分钟（对数）") {
+                        Text(verbatim: model.workerProductivity.joined(separator: "\n"))
+                            .font(.system(.caption, design: .monospaced))
+                            .accessibilityLabel("最近十分钟 Worker 工具调用趋势")
+                    }
                 }
                 Section("站位") {
                     ForEach(model.workerRows) { row in

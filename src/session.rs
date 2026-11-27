@@ -5,6 +5,7 @@
 //! and connection-scoped tools/tasks. A saved session is not a persistent task.
 pub mod attach;
 pub mod control;
+pub mod frontend;
 pub mod gui;
 pub mod install;
 pub(crate) mod ipc;
@@ -13,6 +14,7 @@ pub mod overview;
 pub mod service;
 #[cfg(windows)]
 pub mod windows_service;
+pub(crate) mod workbench;
 
 use std::{
     collections::BTreeMap,
@@ -358,7 +360,32 @@ pub(crate) async fn list_command(args: &[OsString]) -> Result<()> {
     Ok(())
 }
 
+const SESSIONS_HELP: &str = r#"Usage: ssmcp sessions [list] [--json]
+       ssmcp sessions create NAME [options] USERNAME@SERVER
+       ssmcp sessions <status|start|stop|close|restart|auth|remove> NAME [--json]
+       ssmcp sessions logs NAME [--lines N] [--json]
+
+  list     List this OS user's local foreground and saved sessions
+  create   Start a saved session through the running manager; see ssmcp sessions create --help
+  status   Show the process and relay connection state
+  start    Start an existing saved session
+  stop     Stop the session and its watchdog while keeping the definition
+  close    Alias for stop
+  restart  Stop and start the session with its saved configuration and executable
+  logs     Read recent live events as JSONL (50 by default, 1–1000)
+  auth     Show private connection authorization details as JSON
+  remove   Stop the session and delete its saved definition
+
+Create from the current directory with ssmcp USERNAME@SERVER --daemon --name NAME.
+Observe a live saved session with ssmcp attach --read-only NAME.
+For the session manager itself, see ssmcp service --help.
+"#;
+
 pub async fn manage(mut args: Vec<OsString>) -> Result<()> {
+    if args.as_slice() == ["--help"] || args.as_slice() == ["-h"] {
+        print!("{SESSIONS_HELP}");
+        return Ok(());
+    }
     // List flags must be validated before touching a session directory or supervisor.
     if let Some(index) = args.iter().position(|arg| arg != "--json") {
         if args[index] == "list" {

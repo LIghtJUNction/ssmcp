@@ -14,12 +14,14 @@ use tokio_tungstenite::{
     },
 };
 
+pub(super) const DEVICE_USER_ENV: &str = "SSMCP_DEVICE_USERNAME";
 pub(super) const PROJECT_OFFER_ENV: &str = "SSMCP_RELAY_PROJECT_CONTINUITY";
 pub(super) const AUTH_EXPIRED: &str = "ssmcp authorization expired or revoked";
 pub(super) const LEGACY_ACCOUNT_ALLOW: &str =
     "allow entries must use username@github; only GitHub is supported";
 const UNSUPPORTED: &str = "server does not support account clients; upgrade ssmcpd";
 
+pub(super) const FRONTEND_STATUS_ENV: &str = "SSMCP_PRIVATE_FRONTEND_RELAY_STATUS";
 const QUOTA_CODE: &str = "traffic_quota_exceeded:";
 
 fn is_quota_failure(message: &str) -> bool {
@@ -67,6 +69,8 @@ pub(super) fn command(executable: &Path, server: &str) -> Command {
         .arg("__relay")
         .env("SSMCP_RELAY_SERVER", server)
         .env_remove("SSMCP_RELAY_TOKEN")
+        .env_remove(DEVICE_USER_ENV)
+        .env_remove(FRONTEND_STATUS_ENV)
         .env_remove(PROJECT_OFFER_ENV)
         .env_remove(super::account::device_identity::SESSION_ENV)
         .env_remove(super::link_metrics::ENV)
@@ -146,6 +150,8 @@ pub(super) fn offer_chat_disabled(command: &mut Command, worker: bool) {
         offer.push_str(crate::wire::WORKER_DREAMING_CAPABILITY);
         offer.push(',');
         offer.push_str(crate::wire::WORKER_ACTIVITY_CAPABILITY);
+        offer.push(',');
+        offer.push_str(crate::wire::WORKER_PRODUCTIVITY_CAPABILITY);
     }
     command.env("SSMCP_RELAY_CAPABILITIES", offer);
 }
@@ -268,6 +274,7 @@ fn access_capability_header(parent_offer: Option<&str>) -> Option<HeaderValue> {
                 | crate::wire::MAIN_ACTIVITY_CAPABILITY
                 | crate::wire::WORKER_DREAMING_CAPABILITY
                 | crate::wire::WORKER_ACTIVITY_CAPABILITY
+                | crate::wire::WORKER_PRODUCTIVITY_CAPABILITY
                 | crate::wire::peer_port::CAPABILITY
                 | crate::wire::peer_port::AUTO_CAPABILITY
         ) || capabilities[..index].contains(value)
@@ -309,7 +316,13 @@ pub(super) async fn run() -> crate::Result<()> {
     if std::env::var_os("SSMCP_RELAY_TOKEN").is_some() {
         return Err("device transport does not accept account credentials; reconnect with ssmcp username@server".into());
     }
+    let name = std::env::var(DEVICE_USER_ENV)
+        .map_err(|_| "start the device with ssmcp USERNAME@SERVER")?;
+    let token = super::account::managed::token(&name, &server)?;
     let mut request = websocket_url(&server)?.into_client_request()?;
+    let mut bearer = HeaderValue::from_str(&format!("Bearer {token}"))?;
+    bearer.set_sensitive(true);
+    request.headers_mut().insert("authorization", bearer);
     if std::env::var_os(PROJECT_OFFER_ENV).as_deref() == Some(std::ffi::OsStr::new("1")) {
         request.headers_mut().insert(
             crate::wire::project_continuity::OFFER_HEADER,
@@ -341,10 +354,36 @@ pub(super) async fn run() -> crate::Result<()> {
     .await
     .map_err(|_| "relay connection timed out")?;
     let websocket = match connected {
-        Ok((socket, _)) => socket,
+        Ok((socket, response))
+            if response
+                .headers()
+                .get_all("ssmcp-device-verified")
+                .iter()
+                .map(HeaderValue::as_bytes)
+                .eq([b"1".as_slice()]) =>
+        {
+            socket
+        }
+        Ok(_) => {
+            write_frame(
+                &mut tokio::io::stdout(),
+                &Frame::Reject {
+                    message: UNSUPPORTED.into(),
+                },
+            )
+            .await?;
+            return Ok(());
+        }
         Err(tungstenite::Error::Http(response))
             if response.status() == StatusCode::PAYMENT_REQUIRED =>
         {
+            // The new private parent reads our OS exit status. WebSocket frames
+            // and their prose never grant authority to report this refusal.
+            if std::env::var_os(FRONTEND_STATUS_ENV).as_deref() == Some(std::ffi::OsStr::new("1")) {
+                return Err(
+                    crate::session::frontend::RelayAdmissionDenial::TrafficQuotaExceeded.into(),
+                );
+            }
             write_frame(
                 &mut tokio::io::stdout(),
                 &Frame::Reject {
@@ -360,10 +399,19 @@ pub(super) async fn run() -> crate::Result<()> {
                 StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
             ) =>
         {
+            if response.status() == StatusCode::UNAUTHORIZED
+                && response
+                    .body()
+                    .as_deref()
+                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
+                    .is_some_and(|v| v["error"] == "invalid_token")
+            {
+                super::account::managed::expire_rejected(&name, &server, &token).await?;
+            }
             write_frame(
                 &mut tokio::io::stdout(),
                 &Frame::Reject {
-                    message: UNSUPPORTED.into(),
+                    message: AUTH_EXPIRED.into(),
                 },
             )
             .await?;
@@ -384,7 +432,11 @@ pub(super) async fn run() -> crate::Result<()> {
             .await?;
             return Ok(());
         }
-        Err(error) => return Err(format!("encrypted relay connection failed: {error}").into()),
+        Err(_) => {
+            return Err(
+                "encrypted relay connection failed; check connectivity and TLS trust".into(),
+            );
+        }
     };
     let (mut outgoing, mut incoming) = websocket.split();
     // Own the whole partial stdin frame in one task. Cancelling a read_frame
@@ -532,6 +584,10 @@ mod tests {
         assert!(!offers(&command, crate::wire::MAIN_ACTIVITY_CAPABILITY));
         assert!(offers(&command, crate::wire::WORKER_DREAMING_CAPABILITY));
         assert!(offers(&command, crate::wire::WORKER_ACTIVITY_CAPABILITY));
+        assert!(offers(
+            &command,
+            crate::wire::WORKER_PRODUCTIVITY_CAPABILITY
+        ));
         assert!(access_capability_header(parent_offer(&command)).is_some());
         assert!(!offers(&no_input, crate::wire::WORKER_ACTIVITY_CAPABILITY));
         assert!(offers(&command, crate::wire::CHAT_DISABLED_CAPABILITY));

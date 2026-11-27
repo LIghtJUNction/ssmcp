@@ -1,5 +1,5 @@
 //! Foreground relay or local client. Connection details are emitted once as JSON.
-mod access;
+pub(crate) mod access;
 pub(crate) mod account;
 pub(crate) mod agent;
 #[cfg(target_os = "android")]
@@ -18,6 +18,7 @@ mod control_only;
 mod controller_accounts;
 mod controller_command;
 mod environment;
+mod frontend;
 #[cfg(target_os = "android")]
 mod magisk;
 
@@ -55,7 +56,9 @@ mod trust;
 pub(crate) mod ui;
 mod ui_command;
 mod update;
+pub(crate) use update::frontend_update;
 mod version;
+pub(crate) mod web_chat;
 mod worker_control;
 mod worker_window;
 #[cfg(target_os = "linux")]
@@ -66,8 +69,8 @@ use crate::{
     platform::{interrupt_signal, terminate_signal},
     runtime::Runtime,
     wire::{
-        ClientMetadata, Frame, MAX_ALLOWED_PRINCIPALS, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION,
-        canonical_allow_principal, read_frame, validate_title, write_frame,
+        ClientMetadata, Frame, MAX_FRAME, MAX_INFLIGHT, Mode, VERSION, read_frame, validate_title,
+        write_frame,
     },
 };
 use serde_json::json;
@@ -82,13 +85,19 @@ use tokio::{
 
 const WORKER_WINDOW_CHILD_FLAG: &str = "--ssmcp-worker-window-child";
 
-const HELP: &str = r#"ssmcp — make this device available to your MCP controller
+const HELP: &str = concat!(
+    r#"ssmcp — make this device available to your MCP controller
 
-Usage: ssmcp [username@server] [options]
+"#,
+    frontend::usage!(),
+    r#"
 
 Start
-  ssmcp                         Reuse your last successful connection
-  ssmcp --worker N              Open chat and a worker window with N slots
+  ssmcp alice@relay.example           Open the TUI (default)
+  ssmcp alice@relay.example --webui   Open the browser conversation
+  ssmcp alice@relay.example --gui     Open the desktop app for this target
+  ssmcp gui                           Open the desktop connection form
+  ssmcp webui                         Open the browser connection form
   ssmcp local                   Start a same-machine MCP session on Linux
   ssmcp mcp                     Start local MCP for your harness on Linux
   ssmcp mcp install             Register that control endpoint in Codex
@@ -99,6 +108,7 @@ Start
   ssmcp attach NAME --read-only Observe a running local session
 
 Manage
+  login · join                  Authorize this device on its relay
   whoami · config               Read public account info and manage client settings
   controllers                   Review and approve controller accounts on this device
   context                     Saved local and HTTPS connection targets
@@ -114,9 +124,17 @@ Manage
 
 Options
   --name NAME   --title TEXT   --context NAME   --server URL   --context-root PATH
-  --worker N    Open chat and a separate worker monitor
+  --worker N    Open chat and a separate worker monitor in the foreground
+  --daemon      Start a background service without opening terminal windows
   --version [--all]    Show the version or the locked dependency tree
   --no-watchdog  --theme NAME   --no-color
+
+Background sessions
+  ssmcp alice@relay.example --daemon --name workstation
+  ssmcp sessions status workstation
+  ssmcp sessions logs workstation
+  ssmcp sessions stop workstation
+  See ssmcp sessions --help for session management and --help-full for background options.
 
 Same machine (Linux)
   1. Run ssmcp local in the directory you want to control.
@@ -133,15 +151,21 @@ Use ssmcp COMMAND --help for command options; --help-full lists advanced connect
 Foreground --worker keeps chat here and opens a separate worker window.
 Workers use remote agents by default; no local model starts.
 In a connected chat: /help, @file, $skill, !command. From the initial conversation, Left at draft start opens Statistics; /sessions chooses recipients.
-"#;
+"#
+);
 
-const HELP_FULL: &str = r#"ssmcp — connect this device and manage its local sessions
+const HELP_FULL: &str = concat!(
+    r#"ssmcp — connect this device and manage its local sessions
 
-Usage: ssmcp username@server [options]
-       ssmcp [--server URL] [options]
-       ssmcp [connection options] --worker N
+"#,
+    frontend::usage!(),
+    r#"
+       ssmcp username@server [options] --daemon [--name NAME]
+       ssmcp username@server [options] --worker N [--daemon]
        ssmcp mcp [local options]                       (Linux)
        ssmcp mcp install [--harness codex] [--listen IP:PORT]  (Linux)
+       ssmcp login USERNAME@SERVER [--no-browser]
+       ssmcp join USERNAME@SERVER --token-stdin [--no-browser]
        ssmcp whoami [USERNAME@SERVER] [--json]
        ssmcp list [--json]
        ssmcp controllers [list] [--json]
@@ -156,11 +180,12 @@ Usage: ssmcp username@server [options]
        ssmcp tools [status|check|update]
        ssmcp --version [--all]
        ssmcp trust <add|list|remove|path> [--server URL] [--public-key FILE|--pin PIN]
-       ssmcp [options] [--server URL]
        ssmcp overview [--json] [--watch]
        ssmcp overview <show|state|jobs|exec|cancel|command> TARGET [arguments]
-       ssmcp sessions <list|status|start|stop|close|restart|logs|auth|remove> [NAME]
-       ssmcp sessions create NAME [options] [user@]host
+       ssmcp sessions list [--json]
+       ssmcp sessions <status|start|stop|close|restart|auth|remove> NAME [--json]
+       ssmcp sessions logs NAME [--lines N] [--json]
+       ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER
        ssmcp attach [list] [--json]
        ssmcp attach [--local] [--read-only] [--] NAME
        ssmcp computer [version|download [VERSION]|install DOWNLOAD_ID|uninstall INSTALLATION_ID]
@@ -177,7 +202,7 @@ Usage: ssmcp username@server [options]
   --input-token-file PATH  Private bearer token file for web or MCP HTTP
   --input-socket PATH  Private Linux Unix socket path (default /tmp/ssmcp-UID/chat-input.sock)
   --agent RECIPIENT    Advanced chat recipient or explicitly configured local executor
-  --worker N          Open chat plus a separate remote task monitor
+  --worker N          Open chat plus a separate remote task monitor in the foreground
   --worker-k K        Resource share multiplier for explicit local worker executors (default 1)
   --load-harness NAME  Explicitly preload one native protocol outside worker mode
   --list-harnesses    List supported harness providers
@@ -222,22 +247,36 @@ Examples:
   ssmcp alice@my-server.example:8443 --name laptop
   ssmcp config set server https://relay.example.com
   ssmcp whoami
-  ssmcp --name laptop
+  ssmcp alice@relay.example.com --name laptop
   ssmcp list
-  ssmcp --no-watchdog --name one-shot
-  ssmcp sessions status workstation
-  ssmcp sessions stop workstation
+  ssmcp alice@relay.example.com --no-watchdog --name one-shot
   ssmcp service install --system --user alice
   sudo systemctl enable --now ssmcp
-  ssmcp sessions create workstation --watchdog alice@my-server.example
   ssmcp attach --local workstation
   ssmcp attach --read-only workstation
-  ssmcp sessions close workstation
+
+Background sessions:
+  ssmcp alice@my-server.example --daemon --name workstation
+  ssmcp alice@my-server.example --daemon --name workers --worker 2
+  ssmcp sessions create runner --cwd /path/to/project alice@my-server.example
+
+--daemon creates and starts a saved relay session in the current directory.
+Choose a unique --name to manage it later. A background worker pool uses remote
+executors by default and opens no chat or monitor window. Same-machine
+`ssmcp local` requires a foreground terminal.
+Use `ssmcp sessions --help` to inspect connection status, read live logs and manage
+the saved session. Launching a session and connecting to the relay are separate
+steps. Each saved session pins an executable copy. To adopt a newer executable,
+recreate the session with the updated client.
+The watchdog reconnects by default. Use --no-watchdog to disable reconnects or
+--reconnect-delay N to tune the initial delay. These flags cannot be combined.
+--daemon is incompatible with --list-tools.
 
 Start a controlled device with ssmcp username@server. The account must already
-exist on the relay. The device connects without an account token. Control apps
-authorize independently through MCP OAuth, using that account. A successful
-foreground connection saves its target for the next bare ssmcp invocation.
+exist on the relay. First-time device sign-in opens that relay's authorization
+page. Check the short code and confirm the device. Its dedicated credential is
+reused on later launches. Control apps authorize separately through MCP OAuth.
+For an unattended device, run ssmcp login USERNAME@SERVER --no-browser first.
 Create or manage the account on the relay portal. To inspect its public
 information, use ssmcp whoami USERNAME@SERVER.
 
@@ -276,7 +315,8 @@ Managed installs do not replace an external executable or change PATH.
 Background logs use JSONL without terminal colors; foreground display options
 do not change service logging. Stopping a session suppresses its watchdog.
 Reconnection starts a fresh client; jobs from the disconnected client are cleaned up.
-"#;
+"#
+);
 
 // A single reader owns every partial frame after Ready, including while a native
 // backend starts. A separate persistent status channel records a closed bridge
@@ -481,6 +521,8 @@ struct Options {
     server: Option<String>,
     username: Option<String>,
     foreground_identity: Option<account::foreground_identity::Identity>,
+    frontend_owned: bool,
+    workbench: Option<Arc<crate::session::workbench::Workbench>>,
     temporary: bool,
     name: Option<String>,
     title: Option<String>,
@@ -512,6 +554,14 @@ struct Options {
 }
 
 impl Options {
+    fn terminal_frontend(&self) -> bool {
+        !self.frontend_owned && self.chat.input == chat_io::Input::Terminal
+    }
+
+    fn chat_enabled(&self) -> bool {
+        self.worker.is_none() && self.chat.input != chat_io::Input::None
+    }
+
     fn forget_foreground(&self) -> crate::Result<()> {
         if let Some(identity) = &self.foreground_identity {
             identity.replace_previous(None)?;
@@ -641,7 +691,6 @@ impl Options {
         let mut ssh = false;
         let mut name = None;
         let mut title = None;
-        let mut allow = Vec::new();
         let mut context_roots = Vec::new();
         let mut chat = chat_io::Flags::default();
         let mut worker_count = None;
@@ -851,15 +900,8 @@ impl Options {
                 Some(value) if value.starts_with("--title=") => {
                     title = Some(value["--title=".len()..].to_owned());
                 }
-                Some("--allow") if new_connection => {
-                    return Err("--allow was removed; connect with ssmcp username@server".into());
-                }
-                Some("--allow") => {
-                    let value = args.next().ok_or("--allow requires USER@SERVER")?;
-                    add_allowed_principals(
-                        &mut allow,
-                        value.to_str().ok_or("--allow must be UTF-8")?,
-                    )?;
+                Some(value) if value == "--allow" || value.starts_with("--allow=") => {
+                    return Err("--allow was removed; connect as username@server, then use /allow add USER in the live session".into());
                 }
                 Some("--context-root") => {
                     if context_roots.len() >= 8 {
@@ -1056,56 +1098,21 @@ impl Options {
             return Err("--list-tools does not select a connection context".into());
         }
         if new_connection && !list_tools {
-            let explicit_target = local_mode
-                || server.is_some()
-                || destination.is_some()
-                || ssh
-                || identity.is_some()
-                || port.is_some()
-                || config.is_some();
-            let last = if !explicit_target
-                && username.is_none()
-                && context.is_none()
-                && std::env::var_os("SSMCP_CONTEXT").is_none()
-            {
-                account::last_connection().map_err(|error| error.to_string())?
-            } else {
-                None
-            };
-            match last {
-                Some(account::LastConnection::Local {
-                    listen: previous_listen,
-                    public_url: previous_url,
-                    socket: previous_socket,
-                }) => {
-                    local_mode = true;
-                    #[cfg(target_os = "linux")]
-                    {
-                        listen = listen.or(previous_listen);
-                        public_url = public_url.or(previous_url);
-                        socket = socket.or(previous_socket.map(Some));
-                    }
-                    #[cfg(not(target_os = "linux"))]
-                    let _ = (previous_listen, previous_url, previous_socket);
-                }
-                Some(account::LastConnection::Relay {
-                    username: name,
-                    server: origin,
-                }) => {
-                    username = Some(name);
-                    server = Some(origin);
-                }
-                None => {
-                    if let Some(selection) =
-                        connection_context::resolve(context.as_deref(), explicit_target)
-                            .map_err(|error| error.to_string())?
-                    {
-                        match selection.endpoint {
-                            connection_context::Endpoint::Local => local_mode = true,
-                            connection_context::Endpoint::Https(origin) => server = Some(origin),
-                        }
-                    }
-                }
+            if let Some(name) = context.as_deref() {
+                let explicit = local_mode
+                    || destination.is_some()
+                    || server.is_some()
+                    || ssh
+                    || identity.is_some()
+                    || port.is_some()
+                    || config.is_some();
+                let selected = connection_context::resolve(Some(name), explicit)
+                    .map_err(|error| error.to_string())?;
+                local_mode =
+                    selected.is_some_and(|s| s.endpoint == connection_context::Endpoint::Local);
+            }
+            if !local_mode && destination.is_none() {
+                return Err(frontend::missing_target().into());
             }
         }
         #[cfg(not(target_os = "linux"))]
@@ -1143,12 +1150,11 @@ impl Options {
                 || identity.is_some()
                 || port.is_some()
                 || config.is_some()
-                || !allow.is_empty()
                 || daemon
                 || session_control
                 || list_tools)
         {
-            return Err("ssmcp local is a foreground OS-user session; omit destinations, account/SSH options, --allow, --daemon, --session-control and --list-tools".into());
+            return Err("ssmcp local is a foreground OS-user session; omit destinations, account/SSH options, --daemon, --session-control and --list-tools".into());
         }
         #[cfg(target_os = "linux")]
         if let Some(settings) = &local {
@@ -1180,7 +1186,7 @@ impl Options {
             destination = None;
         }
         if new_connection && !ssh && destination.is_some() {
-            return Err("unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server or ssmcp --server https://server".into());
+            return Err("unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server".into());
         }
         if username.is_some() && (destination.is_some() || ssh) {
             return Err("a username selects HTTPS and cannot be combined with SSH options".into());
@@ -1224,11 +1230,6 @@ impl Options {
         if reconnect_delay_secs.is_some() && !watchdog {
             return Err("--reconnect-delay cannot be combined with --no-watchdog".into());
         }
-        if list_tools && !allow.is_empty() {
-            return Err(
-                "--allow requires a relay connection and cannot be used with --list-tools".into(),
-            );
-        }
         if control_only {
             if !daemon
                 || worker.is_some()
@@ -1262,10 +1263,12 @@ impl Options {
             server,
             username,
             foreground_identity: None,
+            frontend_owned: false,
+            workbench: None,
             temporary: false,
             name,
             title,
-            allow,
+            allow: Vec::new(),
             context_roots,
             chat,
             worker,
@@ -1383,11 +1386,6 @@ impl Options {
         }
         if let Some(title) = &self.title {
             args.extend([OsString::from("--title"), OsString::from(title)]);
-        }
-        if self.username.is_none() {
-            for principal in &self.allow {
-                args.extend([OsString::from("--allow"), OsString::from(principal)]);
-            }
         }
         for path in &self.context_roots {
             args.extend([
@@ -1678,7 +1676,7 @@ async fn create_saved_session(args: Vec<OsString>) -> crate::Result<()> {
         .is_some_and(|arg| arg == "--help" || arg == "-h")
     {
         println!(
-            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER\nRequires a running ssmcp service.\n\n  --cpu-limit PERCENT  Linux CPU quota; 100% is one CPU\n  --memory-limit SIZE  Linux memory cap; e.g. 512MiB\n  USERNAME@SERVER selects the registered account. The controlled device connects without logging in."
+            "Usage: ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER\n\nCreates and starts a saved relay session through the running ssmcp service.\n  --cwd DIR           Workspace directory (default: current directory)\n  --json              Print the session record as JSON\n  --worker N          Start a background worker pool with N slots\n  --cpu-limit PERCENT  Linux CPU quota; 100% is one CPU\n  --memory-limit SIZE  Linux memory cap; e.g. 512MiB\n  --no-watchdog       Disable automatic reconnects (enabled by default)\n  --reconnect-delay N  Set the initial reconnect delay in seconds (default: 5)\n\nUSERNAME@SERVER selects the registered account. The device connects without logging in.\nSee ssmcp sessions --help for lifecycle commands."
         );
         return Ok(());
     }
@@ -1822,15 +1820,25 @@ fn worker_arguments(
     Ok(result)
 }
 
+struct PendingStationRetirement {
+    request_id: u64,
+    slot: usize,
+    confirming: bool,
+    client_id: String,
+    generation: String,
+}
+
 struct WorkerController {
     executable: PathBuf,
     arguments: Vec<OsString>,
     cwd: PathBuf,
     preserve_worker_agent: bool,
-    desired: usize,
+    target: worker_control::CountTarget,
     window: Option<worker_window::WindowChild>,
     launching: Option<JoinHandle<Result<worker_window::WindowChild, String>>>,
     pending: Option<(u64, usize)>,
+    resize_progress: Option<(u64, worker_control::ResizeProgress)>,
+    retirement: Option<PendingStationRetirement>,
 }
 
 impl WorkerController {
@@ -1840,11 +1848,99 @@ impl WorkerController {
             arguments: reload::connection_arguments(arguments.to_vec(), options, false)?,
             cwd: std::env::current_dir()?,
             preserve_worker_agent: options.worker.is_some(),
-            desired: options.worker.map_or(0, |worker| worker.count),
+            target: worker_control::CountTarget::new(
+                options.worker.map_or(0, |worker| worker.count),
+            ),
             window: None,
             launching: None,
             pending: None,
+            resize_progress: None,
+            retirement: None,
         })
+    }
+
+    fn clear_retirement(&mut self) {
+        self.retirement = None;
+        terminal::cancel_worker_retirement();
+    }
+
+    fn retirement_pending(&mut self, snapshot: Option<&serde_json::Value>) -> bool {
+        let Some(pending) = &self.retirement else {
+            return false;
+        };
+        let Some(state) = snapshot else {
+            return true;
+        };
+        let same_pool = state["client_id"].as_str() == Some(pending.client_id.as_str())
+            && state["generation"].as_str() == Some(pending.generation.as_str());
+        let receipt = &state["last_resize"];
+        if same_pool && receipt["request_id"].as_u64() != Some(pending.request_id) {
+            return true;
+        }
+
+        let pending = self.retirement.take().expect("pending station request");
+        if same_pool
+            && receipt["accepted"].as_bool() == Some(true)
+            && let Some(actual) = state["desired_total"].as_u64()
+        {
+            // Preparing a station already lowers the child's target. Keep that
+            // receipt so the subsequent confirmation is not mistaken for a resize.
+            self.target.desired = actual as usize;
+        }
+        if !same_pool {
+            terminal::cancel_worker_retirement();
+            terminal::notice("Worker pool changed. Select the station again.");
+        } else if receipt["accepted"].as_bool() != Some(true) {
+            terminal::notice(
+                receipt["error"]
+                    .as_str()
+                    .unwrap_or("Station retirement was rejected."),
+            );
+        } else if pending.confirming {
+            terminal::notice(&format!("Worker #{:02} retired.", pending.slot + 1));
+        } else if let Some(confirmation) =
+            worker_control::Confirmation::from_preview(pending.request_id, pending.slot, state)
+        {
+            terminal::offer_worker_retirement(confirmation);
+        } else {
+            terminal::notice("Worker preview changed. Select the station again.");
+        }
+        false
+    }
+
+    fn request_station_retirement(
+        &mut self,
+        slot: usize,
+        confirmation: Option<worker_control::Confirmation>,
+        snapshot: Option<&serde_json::Value>,
+    ) -> Result<(), String> {
+        let state = snapshot.ok_or("No connected worker pool.")?;
+        let window = self.window.as_ref().ok_or("No connected worker window.")?;
+        let client_id = state["client_id"]
+            .as_str()
+            .ok_or("Worker window is reconnecting.")?;
+        let generation = state["generation"]
+            .as_str()
+            .ok_or("Worker pool is reconnecting.")?;
+        if state["stopping"] == true || state["closed"] == true {
+            return Err("Worker pool is stopping.".into());
+        }
+        let confirming = confirmation.is_some();
+        let request_id = match confirmation {
+            Some(proof) if proof.slot == slot && proof.matches(state) => {
+                window.confirm_retirement(slot, proof.request_id)?
+            }
+            Some(_) => return Err("That preview expired. Select the station again.".into()),
+            None => window.prepare_retirement(slot)?,
+        };
+        self.retirement = Some(PendingStationRetirement {
+            request_id,
+            slot,
+            confirming,
+            client_id: client_id.to_owned(),
+            generation: generation.to_owned(),
+        });
+        Ok(())
     }
 
     async fn poll(&mut self) {
@@ -1864,8 +1960,10 @@ impl WorkerController {
                         Err(error) => format!("worker window launch ended: {error}"),
                         Ok(Ok(_)) => unreachable!(),
                     };
-                    self.desired = 0;
+                    self.target.desired = 0;
                     self.pending = None;
+                    self.target.queued_from = None;
+                    self.resize_progress = None;
                     terminal::notice(&format!("Could not open worker window: {error}"));
                 }
             }
@@ -1882,6 +1980,9 @@ impl WorkerController {
                 // Drop its owned handle before opening exactly one replacement.
                 self.window = None;
                 self.pending = None;
+                self.target.queued_from = None;
+                self.resize_progress = None;
+                self.clear_retirement();
                 terminal::notice("Reloading worker window; this chat session stays connected.");
                 // Re-check parent stop intent on the next UI tick before launch.
                 return;
@@ -1889,13 +1990,19 @@ impl WorkerController {
             Some((Ok(true), false)) => {
                 self.window = None;
                 self.pending = None;
-                self.desired = 0;
+                self.target.queued_from = None;
+                self.resize_progress = None;
+                self.clear_retirement();
+                self.target.desired = 0;
                 terminal::notice("Worker window closed; this chat session remains available.");
             }
             Some((Err(error), _)) => {
                 self.window = None;
                 self.pending = None;
-                self.desired = 0;
+                self.target.queued_from = None;
+                self.resize_progress = None;
+                self.clear_retirement();
+                self.target.desired = 0;
                 terminal::notice(&format!(
                     "Worker window: {error}. This chat session remains available."
                 ));
@@ -1907,61 +2014,151 @@ impl WorkerController {
             .window
             .as_ref()
             .and_then(|_| worker_window::linked_snapshot());
-        if let (Some((id, target)), Some(snapshot)) = (self.pending, snapshot.as_ref()) {
-            let receipt = &snapshot["last_resize"];
-            if receipt["request_id"].as_u64() == Some(id) {
+        if self.retirement_pending(snapshot.as_ref()) {
+            return;
+        }
+        let progress = snapshot
+            .as_ref()
+            .and_then(worker_control::ResizeProgress::read);
+        if let (Some(state), Some(progress)) = (snapshot.as_ref(), progress) {
+            let receipt = &state["last_resize"];
+            let receipt_id = receipt["request_id"].as_u64();
+            if let (Some(client), Some(generation)) =
+                (state["client_id"].as_str(), state["generation"].as_str())
+                && self.target.observe_pool(client, generation)
+            {
+                if self.pending.is_some() || self.resize_progress.is_some() {
+                    terminal::notice(
+                        "Worker pool changed. Check /worker ls before requesting another count change.",
+                    );
+                }
+                self.pending = None;
+                self.resize_progress = None;
+            }
+            if let Some((id, target)) = self.pending
+                && receipt_id == Some(id)
+            {
                 self.pending = None;
                 if receipt["accepted"].as_bool() != Some(true) {
-                    let actual = snapshot["desired_total"].as_u64().unwrap_or(0) as usize;
-                    let later_delta = self.desired as i32 - target as i32;
-                    self.desired = worker_total_after_delta(actual, later_delta).unwrap_or(actual);
                     let error = receipt["error"]
                         .as_str()
                         .unwrap_or("worker resize was rejected");
                     terminal::notice(&format!("Worker target unchanged: {error}"));
+                } else if target != progress.target {
+                    terminal::notice(&format!(
+                        "Worker target {target} was accepted. The pool now requests {}.",
+                        progress.target
+                    ));
+                } else {
+                    terminal::notice(&progress.notice());
+                    self.resize_progress = (!progress.settled()).then_some((id, progress));
                 }
+            }
+            if let Some((id, previous)) = self.resize_progress {
+                if receipt_id != Some(id) || progress.target != previous.target {
+                    self.resize_progress = None;
+                } else if progress != previous {
+                    terminal::notice(&progress.notice());
+                    self.resize_progress = (!progress.settled()).then_some((id, progress));
+                }
+            }
+            if self.pending.is_none()
+                && let Err(error) = self.target.reconcile(progress.target)
+            {
+                terminal::notice(&error);
             }
         }
 
         // A bounded batch keeps input responsive even if another producer is busy.
-        let previous_target = self.desired;
+        let previous_target = self.target.desired;
         for _ in 0..8 {
-            let Some(delta) = worker_control::take() else {
-                break;
+            let from_monitor = self.window.as_ref().and_then(|window| {
+                snapshot
+                    .as_ref()
+                    .and_then(|state| window.take_monitor_delta(state))
+            });
+            let request = match from_monitor {
+                Some(Ok(delta)) => worker_control::Request::Delta(delta),
+                Some(Err(())) => {
+                    if let Some(window) = &self.window {
+                        let _ = window.reply_monitor_delta(Err(()));
+                    }
+                    continue;
+                }
+                None => {
+                    let Some(request) = worker_control::take() else {
+                        break;
+                    };
+                    request
+                }
             };
-            match worker_total_after_delta(self.desired, delta) {
-                Ok(total) => self.desired = total,
-                Err(error) => terminal::notice(&error),
+            match request {
+                worker_control::Request::Delta(delta) => {
+                    let total = self.target.change(delta);
+                    if from_monitor.is_some()
+                        && let Some(window) = &self.window
+                        && let Err(error) =
+                            window.reply_monitor_delta(total.as_ref().copied().map_err(|_| ()))
+                    {
+                        terminal::notice(&format!(
+                            "Could not acknowledge the worker request: {error}"
+                        ));
+                    }
+                    if let Err(error) = total {
+                        terminal::notice(&error);
+                    }
+                }
+                worker_control::Request::Retire { slot, confirmation } => {
+                    if self.pending.is_some()
+                        || self.target.desired != previous_target
+                        || snapshot
+                            .as_ref()
+                            .and_then(|state| state["desired_total"].as_u64())
+                            .is_some_and(|target| target != self.target.desired as u64)
+                    {
+                        terminal::notice(
+                            "A worker count change is pending. Select the station after its receipt.",
+                        );
+                    } else {
+                        match self.request_station_retirement(slot, confirmation, snapshot.as_ref())
+                        {
+                            Ok(()) => return,
+                            Err(error) => terminal::notice(&error),
+                        }
+                    }
+                }
             }
         }
 
-        if self.desired != previous_target
-            && snapshot.as_ref().is_some_and(|snapshot| {
-                snapshot["retiring"]
-                    .as_u64()
-                    .is_some_and(|count| count != 0)
-                    && snapshot["desired_total"].as_u64() != Some(self.desired as u64)
-            })
+        if self.target.desired != previous_target
+            && let Some(progress) = progress
+            && (self.pending.is_some() || !progress.settled())
+            && progress.target != self.target.desired
         {
-            terminal::notice("Worker target queued; waiting for retiring workers to leave.");
+            terminal::notice(&format!(
+                "Worker target {} is queued. {}",
+                self.target.desired,
+                progress.notice()
+            ));
         }
 
-        if self.window.is_none() && self.launching.is_none() && self.desired != 0 {
+        if self.window.is_none() && self.launching.is_none() && self.target.desired != 0 {
             let arguments = match worker_arguments(
                 &self.arguments,
-                self.desired,
+                self.target.desired,
                 true,
                 !self.preserve_worker_agent,
             ) {
                 Ok(arguments) => arguments,
                 Err(error) => {
-                    self.desired = 0;
+                    self.target.desired = 0;
                     terminal::notice(&error);
                     return;
                 }
             };
             let executable = self.executable.clone();
             let cwd = self.cwd.clone();
+            self.target.queued_from = None;
             self.launching = Some(tokio::task::spawn_blocking(move || {
                 worker_window::launch(&executable, &arguments, &cwd)
             }));
@@ -1969,22 +2166,20 @@ impl WorkerController {
             return;
         }
 
-        if let (Some(window), Some(snapshot)) = (self.window.as_ref(), snapshot.as_ref()) {
-            let actual = snapshot["desired_total"]
-                .as_u64()
-                .map(|value| value as usize);
-            let settled = snapshot["retiring"].as_u64() == Some(0)
-                && snapshot["total"].as_u64() == snapshot["desired_total"].as_u64();
-            if self.pending.is_none()
-                && settled
-                && snapshot["stopping"].as_bool() != Some(true)
-                && snapshot["closed"].as_bool() != Some(true)
-                && actual.is_some_and(|actual| actual != self.desired)
-            {
-                match window.request_resize(self.desired) {
-                    Ok(id) => self.pending = Some((id, self.desired)),
+        if let (Some(window), Some(state), Some(progress)) =
+            (self.window.as_ref(), snapshot.as_ref(), progress)
+            && self.target.queued_from.is_some()
+            && self.pending.is_none()
+            && progress.settled()
+            && state["stopping"].as_bool() != Some(true)
+            && state["closed"].as_bool() != Some(true)
+        {
+            self.target.queued_from = None;
+            if progress.target != self.target.desired {
+                match window.request_resize(self.target.desired) {
+                    Ok(id) => self.pending = Some((id, self.target.desired)),
                     Err(error) => {
-                        self.desired = actual.unwrap_or(0);
+                        self.target.desired = progress.target;
                         terminal::notice(&format!("Could not change worker target: {error}"));
                     }
                 }
@@ -1995,6 +2190,7 @@ impl WorkerController {
 
 impl Drop for WorkerController {
     fn drop(&mut self) {
+        self.clear_retirement();
         if let Some(launch) = self.launching.take() {
             // A blocking launch that already started owns its eventual result;
             // dropping the cancelled handle drops that WindowChild on completion.
@@ -2034,22 +2230,6 @@ fn connection_option_takes_value(option: &str) -> bool {
                 | "--shell"
                 | "--tty"
         )
-}
-
-fn add_allowed_principals(allow: &mut Vec<String>, value: &str) -> Result<(), String> {
-    for entry in value.split(',') {
-        let principal =
-            canonical_allow_principal(entry.trim()).map_err(|error| format!("--allow: {error}"))?;
-        if !allow.contains(&principal) {
-            if allow.len() == MAX_ALLOWED_PRINCIPALS {
-                return Err(format!(
-                    "--allow accepts at most {MAX_ALLOWED_PRINCIPALS} distinct allow targets"
-                ));
-            }
-            allow.push(principal);
-        }
-    }
-    Ok(())
 }
 
 fn validate_destination(destination: &str) -> Result<(), String> {
@@ -2121,7 +2301,59 @@ pub async fn run() -> crate::Result<()> {
     if let Some(result) = crate::worker::child_entry().await {
         return result;
     }
-    let mut args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    let args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if args.is_empty() {
+        return Err(frontend::missing_target().into());
+    }
+    if matches!(
+        args.first().and_then(|arg| arg.to_str()),
+        Some("__frontend-run" | "__magisk-chat-frontend")
+    ) {
+        let [_, destination, instance] = args.as_slice() else {
+            return Err("the frontend runner requires an explicit destination and instance".into());
+        };
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            return Err("the frontend core requires its owner's private input pipe".into());
+        }
+        crate::server_endpoint::parse_target(
+            destination.to_str().ok_or("invalid frontend destination")?,
+        )?;
+        let instance = instance
+            .to_str()
+            .ok_or("invalid frontend instance")?
+            .to_owned();
+        // One anonymous stdin pipe belongs to the launching frontend. EOF also
+        // wakes this process if the window crashes without running destructors.
+        let (closed, lease) = tokio::sync::oneshot::channel();
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let _ = std::io::stdin().read(&mut [0u8; 1]);
+            let _ = closed.send(());
+        });
+        let core = async {
+            if args[0] == "__magisk-chat-frontend" {
+                web_chat::run(
+                    destination.to_str().ok_or("invalid chat destination")?,
+                    instance,
+                )
+                .await
+            } else {
+                run_with_args(vec![destination.clone()], Some(instance)).await
+            }
+        };
+        tokio::select! {
+            result = core => return result,
+            _ = lease => return Ok(()),
+        }
+    }
+    run_with_args(args, None).await
+}
+
+async fn run_with_args(
+    mut args: Vec<OsString>,
+    frontend_instance: Option<String>,
+) -> crate::Result<()> {
     #[cfg(target_os = "android")]
     if args.first().is_some_and(|arg| arg == "__android_app") {
         args.remove(0);
@@ -2179,7 +2411,7 @@ pub async fn run() -> crate::Result<()> {
             Ok(()) => 0,
             Err(error) => {
                 report_error(&error.to_string());
-                1
+                i32::from(crate::session::frontend::RelayAdmissionDenial::exit_code_for(&error))
             }
         };
         // This transport child owns no native tools. Exit also ends Tokio's
@@ -2231,6 +2463,9 @@ pub async fn run() -> crate::Result<()> {
         return crate::session::overview::run(args.into_iter().skip(1).collect()).await;
     }
     if args.first().is_some_and(|arg| arg == "gui") {
+        if args.len() == 1 {
+            return frontend::desktop(None).await;
+        }
         return crate::session::gui::run(args.into_iter().skip(1).collect()).await;
     }
     if args.first().is_some_and(|arg| arg == "ui") {
@@ -2247,11 +2482,12 @@ pub async fn run() -> crate::Result<()> {
     }
     connection_context::normalize_args(&mut args)?;
     config::normalize_args(&mut args)?;
-    if args.first().is_some_and(|arg| arg == "login")
-        || (args.first().is_some_and(|arg| arg == "setup")
-            && !args.get(1).is_some_and(|arg| arg == "browser"))
+    if args.first().is_some_and(|arg| arg == "setup")
+        && !args.get(1).is_some_and(|arg| arg == "browser")
     {
-        return Err("client login was removed; connect this device with ssmcp username@server and authorize the controller through MCP OAuth".into());
+        return Err(
+            "setup was removed; sign in on this device with ssmcp login USERNAME@SERVER".into(),
+        );
     }
     if computer_control::dispatch(&args).await? {
         return Ok(());
@@ -2270,11 +2506,8 @@ pub async fn run() -> crate::Result<()> {
     if account::dispatch(&args).await? {
         return Ok(());
     }
-    if args
-        .first()
-        .is_some_and(|arg| arg == "invite" || arg == "join")
-    {
-        return Err("invite and join were removed; start the controlled device with ssmcp username@relay-server".into());
+    if args.first().is_some_and(|arg| arg == "invite") {
+        return Err("the invite subcommand was removed; redeem a device invitation with ssmcp join USERNAME@SERVER --token-stdin".into());
     }
     if args.first().is_some_and(|arg| arg == "service") {
         return crate::session::install::manage(args.into_iter().skip(1).collect()).await;
@@ -2286,6 +2519,15 @@ pub async fn run() -> crate::Result<()> {
     }
     if args.first().is_some_and(|arg| arg == "sessions") {
         return crate::session::manage(args.into_iter().skip(1).collect()).await;
+    }
+    if frontend_instance.is_none() && !args.first().is_some_and(|arg| arg == "__session-run") {
+        match frontend::parse(&mut args)? {
+            frontend::Launch::Desktop(target) => return frontend::desktop(target).await,
+            frontend::Launch::Web(target) => {
+                return crate::session::gui::launch(target.as_deref()).await;
+            }
+            frontend::Launch::Tui => {}
+        }
     }
     let mut service = if args.first().is_some_and(|arg| arg == "__session-run") {
         if args.len() != 2 {
@@ -2316,6 +2558,7 @@ pub async fn run() -> crate::Result<()> {
     let Some(mut options) = parsed else {
         return Ok(());
     };
+    options.frontend_owned = frontend_instance.is_some();
     options
         .resource_limits
         .require_background(service.is_some() || options.daemon)?;
@@ -2378,9 +2621,21 @@ pub async fn run() -> crate::Result<()> {
         }
         return Err(error);
     }
+    if !options.list_tools {
+        let destination = match (&options.username, &options.server) {
+            (Some(name), Some(server)) if options.resource_limits.is_empty() => {
+                Some(crate::server_endpoint::allow_principal(name, server)?)
+            }
+            _ => None,
+        };
+        options.workbench = Some(Arc::new(crate::session::workbench::Workbench::new(
+            std::env::current_dir()?,
+            destination,
+        )?));
+    }
     // Remember the launch entry before the first connection or later updates.
     reload::installed_program()?;
-    let mut ui = if service.is_some() {
+    let mut ui = if service.is_some() || options.frontend_owned {
         ui::Ui::default()
     } else {
         ui::Ui::load(options.ui_config.as_deref())?
@@ -2396,7 +2651,7 @@ pub async fn run() -> crate::Result<()> {
     }
     ui.timestamps |= options.timestamps;
     ui.color &= !options.no_color;
-    if service.is_some() {
+    if service.is_some() || options.frontend_owned {
         ui.dashboard = false;
         ui.color = false;
         ui.log_format = render::LogFormat::Jsonl;
@@ -2441,8 +2696,15 @@ pub async fn run() -> crate::Result<()> {
         );
     }
     let mut foreground = if service.is_none() && !options.list_tools {
-        match crate::session::overview::Registration::open(options.metadata()?).await {
+        match crate::session::overview::Registration::open_with_instance(
+            options.metadata()?,
+            frontend_instance,
+        )
+        .await
+        {
             Ok(registration) => Some(registration),
+            // A graphical owner has no interactive fallback. Its private endpoint is required.
+            Err(error) if options.frontend_owned => return Err(error),
             Err(error) => {
                 render::status(
                     "overview",
@@ -2595,8 +2857,10 @@ pub async fn run() -> crate::Result<()> {
                 drop(service.take());
                 if let Some(controller) = &options.worker_window {
                     let controller = controller.lock().await;
-                    restart
-                        .set_worker_total(controller.desired, controller.preserve_worker_agent)?;
+                    restart.set_worker_total(
+                        controller.target.desired,
+                        controller.preserve_worker_agent,
+                    )?;
                 }
                 // exec does not run Rust destructors; stop this controller's child first.
                 drop(options.worker_window.take());
@@ -2693,7 +2957,9 @@ pub(crate) fn watchdog_retries(
 ) -> bool {
     enabled
         && error.is_none_or(|error| {
-            !error.is::<UnsupportedWireProtocol>() && !error.is::<relay::PermanentFailure>()
+            !error.is::<UnsupportedWireProtocol>()
+                && !error.is::<relay::PermanentFailure>()
+                && !error.is::<crate::session::frontend::RelayAdmissionDenial>()
         })
 }
 
@@ -2751,7 +3017,7 @@ impl RegisteredTransport {
             )
             .await?;
             return Err(Box::new(relay::PermanentFailure(
-                "server did not acknowledge account access controls; update ssmcpd before using --allow".into()
+                "server did not acknowledge account access controls; update ssmcpd before using /allow".into()
             )));
         }
         Ok(())
@@ -2867,6 +3133,11 @@ async fn register_transport(
         _ = std::future::ready(()) => {},
     }
     let mut transport_command = command();
+    let frontend_status = matches!(transport_kind, TransportKind::Relay)
+        && transport_command
+            .as_std()
+            .get_envs()
+            .any(|(k, v)| k == relay::FRONTEND_STATUS_ENV && v == Some(std::ffi::OsStr::new("1")));
     let timing_offer = relay::timing_offer(&transport_command);
     let durable_wait_offer = relay::durable_wait_display_offer(&transport_command);
     let peer_offer = relay::peer_ports_offer(&transport_command);
@@ -2922,7 +3193,28 @@ async fn register_transport(
             }
         };
         if let Err(error) = decision {
+            // The opted-in helper exits without writing a frame on HTTP 402.
+            // Give it time to be reaped before ordinary registration cleanup
+            // kills it. An arbitrary Reject frame never qualifies.
+            let quota = frontend_status
+                && error.downcast_ref::<io::Error>().is_some_and(|e| {
+                    matches!(
+                        e.kind(),
+                        io::ErrorKind::UnexpectedEof
+                            | io::ErrorKind::BrokenPipe
+                            | io::ErrorKind::ConnectionReset
+                    )
+                })
+                && matches!(
+                    timeout(Duration::from_secs(1), process.wait()).await,
+                    Ok(Ok(status)) if crate::session::frontend::RelayAdmissionDenial::from_exit(&status) == Some(crate::session::frontend::RelayAdmissionDenial::TrafficQuotaExceeded)
+                );
             stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
+            if quota {
+                return Err(Box::new(
+                    crate::session::frontend::RelayAdmissionDenial::TrafficQuotaExceeded,
+                ));
+            }
             return Err(error);
         }
     }
@@ -3019,6 +3311,15 @@ async fn register_transport(
         ),
         Some(Frame::Reject { message }) => {
             stop_registration(&mut process, &mut stderr_pump, transport_kind).await?;
+            if frontend_status
+                && admission_server.is_some()
+                && message
+                    == "online_session_limit: free accounts can have one online session at a time"
+            {
+                return Err(Box::new(
+                    crate::session::frontend::RelayAdmissionDenial::OnlineSessionLimit,
+                ));
+            }
             // Only a parsed registration rejection is terminal for the protocol.
             // Stderr, EOF, timeouts and unrelated authorization errors stay distinct.
             if message == UNSUPPORTED_WIRE_PROTOCOL
@@ -3152,10 +3453,7 @@ fn apply_worker_activity(members: Vec<crate::wire::WorkerMemberActivity>) -> Res
         if !valid_worker_member(&member.agent_id) {
             return Err("invalid worker activity member".into());
         }
-        if activity
-            .insert(member.agent_id, (member.tool_calls_10m, member.offline))
-            .is_some()
-        {
+        if activity.insert(member.agent_id.clone(), member).is_some() {
             return Err("duplicate worker activity member".into());
         }
     }
@@ -3340,6 +3638,18 @@ async fn connect(
         .server
         .as_deref()
         .ok_or("a relay server is required")?;
+    let name = options
+        .username
+        .as_deref()
+        .ok_or("device login requires USERNAME@SERVER")?;
+    let interactive = service.is_none()
+        && !options.daemon
+        && !options.worker_window_child
+        && !options.frontend_owned
+        && std::io::IsTerminal::is_terminal(&std::io::stdin());
+    account::managed::ensure(name, server, interactive)
+        .await
+        .map_err(|e| relay::PermanentFailure(e.to_string()))?;
     connect_inner(
         options,
         ui,
@@ -3438,7 +3748,7 @@ async fn connect_inner(
         }
     };
     let mut metric_channel = None;
-    let chat_enabled = options.worker.is_none() && options.chat.input != chat_io::Input::None;
+    let chat_enabled = options.chat_enabled();
     let admission_server = match &transport {
         Transport::Account { server } => Some(*server),
         #[cfg(target_os = "linux")]
@@ -3451,6 +3761,14 @@ async fn connect_inner(
         registered,
         || {
             let mut command = transport.command(&executable);
+            if let Some(name) = options.username.as_deref()
+                && matches!(&transport, Transport::Account { .. })
+            {
+                command.env(relay::DEVICE_USER_ENV, name);
+            }
+            if options.frontend_owned && matches!(&transport, Transport::Account { .. }) {
+                command.env(relay::FRONTEND_STATUS_ENV, "1");
+            }
             if options.foreground_identity.is_some() {
                 command.env(relay::PROJECT_OFFER_ENV, "1");
             }
@@ -3542,7 +3860,7 @@ async fn connect_inner(
     if let Some(worker) = options.worker {
         crate::worker::prepare_display(worker);
     }
-    let display_session = if options.chat.input == chat_io::Input::Terminal {
+    let display_session = if options.terminal_frontend() {
         match transport.start_display(
             ui,
             &metadata.cwd,
@@ -3588,8 +3906,7 @@ async fn connect_inner(
     if let [owner] = metadata.allow.as_slice() {
         terminal::set_device_owner(owner);
     }
-    // Explicit --allow uses the same relay transport without an account token.
-    // Preserve its final authorization outcome even when the child exits first.
+    // Preserve the relay's final authorization outcome even when the transport child exits first.
     let mut incoming = Incoming::start(reader, transport_kind);
     let _link_metrics = display_session
         .as_ref()
@@ -3629,6 +3946,9 @@ async fn connect_inner(
         management,
     )
     .and_then(|runtime| {
+        if let Some(workbench) = &options.workbench {
+            runtime.local_shell().bind_workbench(workbench.clone())?;
+        }
         runtime.bind_client_id(&client_id)?;
         runtime.configure_timing_version(time_observation_supported, wait_display_version)?;
         runtime.configure_chat(chat_enabled)?;
@@ -3711,6 +4031,9 @@ async fn connect_inner(
     }
     let published: crate::Result<()> = if let Some(runner) = service {
         runner.record("connected", attempt, None, Some(&output), None)
+    } else if options.frontend_owned {
+        // The owner receives its connection through the private endpoint.
+        Ok(())
     } else if chat_enabled && options.chat.input != chat_io::Input::Terminal {
         // External input owns stdout. A local OAuth client still needs its
         // connection URL and one-time code on the operator's stderr.
@@ -3731,7 +4054,7 @@ async fn connect_inner(
     }
     #[cfg(target_os = "android")]
     magisk::signal_connected();
-    if service.is_none() && !options.worker_window_child {
+    if service.is_none() && !options.worker_window_child && !options.frontend_owned {
         let target =
             options
                 .username
@@ -3782,7 +4105,7 @@ async fn connect_inner(
             "Enter login_code on the MCP OAuth page. Ctrl-C disconnects and revokes access."
         },
     );
-    let local_input = match if options.chat.input == chat_io::Input::Terminal {
+    let local_input = match if options.terminal_frontend() {
         if options.worker.is_some() {
             input::Input::attach_monitor(backend.terminals())
         } else {
@@ -3831,9 +4154,14 @@ async fn connect_inner(
     ui_updates.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let writer = Arc::new(Mutex::new(writer));
     let mut steering_commands = steering::connect_with_chat(&client_id, VERSION, chat_enabled);
-    let mut access_commands = access::connect(access_supported);
+    let mut access_commands = access::connect(
+        access_supported && admission_server.is_some(),
+        admission_server,
+        &client_id,
+    );
     let mut message_commands = messaging::connect(messaging_supported);
     let mut chat = if !chat_enabled
+        || options.frontend_owned
         || (options.chat.input == chat_io::Input::Terminal
             && options.chat.agent == chat_io::Agent::NextCaller)
     {
@@ -3971,7 +4299,7 @@ async fn connect_inner(
                         }
                     }
                     let accepted = if options.temporary {
-                        Err("this retired temporary credential cannot restart a session; start again with --allow username@relay-server".into())
+                        Err("this retired temporary credential cannot restart a session; sign in on the device and reconnect as username@relay-server".into())
                     } else {
                         backend.validate_reload().and_then(|()| restart.accept(&json!({}), requests.len(), &client_id, github_auth)).map(|_| ())
                     };
@@ -4017,15 +4345,9 @@ async fn connect_inner(
                     }
                 }
                 if options.worker_window_child
-                    && let Some(total) = worker_window::take_resize_request()
+                    && let Err(error) = worker_window::apply_pending_resize(&backend)
                 {
-                    let result = backend.resize_workers(total);
-                    if let Err(error) = &result {
-                        terminal::notice(&format!("Worker resize rejected: {error}"));
-                    }
-                    if let Err(error) = worker_window::report_resize_result(total, result) {
-                        terminal::notice(&format!("Worker resize receipt: {error}"));
-                    }
+                    terminal::notice(&format!("Worker change: {error}"));
                 }
                 if let Some(controller) = &options.worker_window {
                     controller.lock().await.poll().await;
@@ -4062,7 +4384,7 @@ async fn connect_inner(
                     {
                         let result = attribution.as_ref().ok_or("missing authenticated controller identity").and_then(|source| {
                             match controller_accounts::observe_verified(server, &source.account, &client_id) {
-                                Ok(decision) if decision.is_allowed() => Ok(()),
+                                Ok(true) => Ok(()),
                                 Ok(_) => Err("controller requires local approval; inspect ssmcp controllers on the device"),
                                 Err(error) => {
                                     render::status("account", "Warning", &format!("Could not verify local controller policy: {error}"));
@@ -4103,7 +4425,7 @@ async fn connect_inner(
                         let _controller = render::controller_started(id, controller.as_ref(), attribution.as_deref(), &operation);
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
                         let mut response = if options.temporary {
-                            Err("this retired temporary credential cannot restart a session; start again with --allow username@relay-server".into())
+                            Err("this retired temporary credential cannot restart a session; sign in on the device and reconnect as username@relay-server".into())
                         } else {
                             backend.validate_reload().and_then(|()| restart.accept(arguments, requests.len(), &client_id, github_auth))
                         };
@@ -4228,7 +4550,7 @@ async fn connect_inner(
                 Some(Ok(Some(Frame::MessagesReply { id, result }))) => messaging::reply(id, result),
                 Some(Ok(Some(Frame::ResolvedController { id, principal, provider, subject }))) => {
                     if let Some(server) = admission_server && access::awaiting_proposal(id, &principal) {
-                        match authorize_proposal(server, &principal, &provider, &subject) {
+                        match access::resolve_grant(id, server, &principal, &provider, &subject) {
                             Ok(()) => {
                                 let mut writer = writer.lock().await;
                                 if access::awaiting_proposal(id, &principal) {
@@ -4349,6 +4671,18 @@ pub fn report_run_error(error: &(dyn std::error::Error + 'static)) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn frontend_owner_keeps_chat_and_never_consumes_terminal_input() {
+        let mut options = Options::parse_new([OsString::from("alice@relay.example")])
+            .unwrap()
+            .unwrap();
+        assert!(options.terminal_frontend());
+        assert!(options.chat_enabled());
+        options.frontend_owned = true;
+        assert!(!options.terminal_frontend());
+        assert!(options.chat_enabled());
+    }
+
     #[tokio::test]
     async fn managed_file_cleanup_does_not_overlap_and_shutdown_waits_for_the_scan() {
         use std::future::Future;
@@ -4816,7 +5150,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 error,
-                "unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server or ssmcp --server https://server"
+                "unrecognized command or destination; see ssmcp --help. For tool sources use ssmcp tools [status|check|update]; for a connection use ssmcp username@server"
             );
             assert!(!error.contains("SSH"));
         }
@@ -4830,11 +5164,14 @@ mod tests {
         assert_eq!(named.username.as_deref(), Some("alice"));
         assert_eq!(named.server.as_deref(), Some("https://relay.example"));
         assert!(named.destination.is_none());
-        let server = Options::parse_new(["--server", "https://relay.example"].map(OsString::from))
-            .unwrap()
-            .unwrap();
-        assert_eq!(server.server.as_deref(), Some("https://relay.example"));
-        assert!(server.destination.is_none());
+        for args in [
+            vec![],
+            vec!["--server", "https://relay.example"],
+            vec!["--worker", "3"],
+            vec!["--username", "alice"],
+        ] {
+            assert!(Options::parse_new(args.into_iter().map(OsString::from)).is_err());
+        }
         let legacy = Options::parse_new(["--ssh", "alice@relay.example"].map(OsString::from))
             .unwrap()
             .unwrap();
@@ -4863,11 +5200,10 @@ mod tests {
 
     #[test]
     fn resume_remains_literal_in_titles() {
-        let title = Options::parse_new(
-            ["--server", "https://relay.example", "--title", "resume"].map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
+        let title =
+            Options::parse_new(["alice@relay.example", "--title", "resume"].map(OsString::from))
+                .unwrap()
+                .unwrap();
         assert_eq!(title.title.as_deref(), Some("resume"));
     }
 
@@ -5087,8 +5423,8 @@ mod tests {
                 "--watchdog",
                 "--reconnect-delay",
                 "20",
-                "--allow",
-                "octocat@relay.example",
+                "--username",
+                "octocat",
                 "--server",
                 "https://relay.example",
             ]
@@ -5110,7 +5446,8 @@ mod tests {
         let parsed = Options::parse(child.args.iter().map(OsString::from))
             .unwrap()
             .unwrap();
-        assert_eq!(parsed.allow, parent.allow);
+        assert_eq!(parsed.username, parent.username);
+        assert!(parsed.allow.is_empty());
         assert_eq!(parsed.destination, parent.destination);
         assert_eq!(parsed.server, parent.server);
         assert_eq!(parsed.title.as_deref(), Some("--help"));
@@ -5371,12 +5708,12 @@ mod tests {
                     "--daemon",
                     "--server",
                     "https://relay.example",
-                    "--allow",
-                    "OctoCat@Relay.Example",
+                    "--username",
+                    "octocat",
                     "--theme",
                     "nord",
                 ],
-                vec!["octocat@relay.example"],
+                Vec::<&str>::new(),
             ),
             (
                 vec![
@@ -5745,124 +6082,30 @@ mod tests {
     }
 
     #[test]
-    fn qualified_allow_flags_combine_canonicalize_and_deduplicate() {
-        let options = Options::parse(
-            [
-                "--server",
-                "https://relay.example",
-                "--allow",
-                "OctoCat@RELAY.Example:443, Alice-Dev@relay.example",
-                "--allow",
-                "OCTOCAT@relay.example,bob@relay.example",
-            ]
-            .map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            options.allow,
-            [
-                "octocat@relay.example",
-                "alice-dev@relay.example",
-                "bob@relay.example"
-            ]
-        );
-        assert_eq!(options.metadata().unwrap().allow, options.allow);
-        assert_eq!(options.server.as_deref(), Some("https://relay.example"));
-        assert!(options.destination.is_none());
-    }
-
-    #[test]
-    fn qualified_allow_survives_saved_sessions_without_credentials() {
-        let options = Options::parse(
-            [
-                "--server",
-                "https://relay.example",
-                "--name",
-                "allow-roundtrip",
-                "--allow",
-                "Alice@relay.example, ALICE_DEV@relay.example",
-                "--allow",
-                "alice@relay.example",
-            ]
-            .map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            options.allow,
-            ["alice@relay.example", "alice_dev@relay.example"]
-        );
-        let restored = Options::parse_saved(&options.session_spec().unwrap())
+    fn current_and_saved_launches_reject_startup_access_grants() {
+        let base = Options::parse_new(["owner@relay.example"].map(OsString::from))
             .unwrap()
             .unwrap();
-        assert_eq!(restored.allow, options.allow);
-        assert_eq!(restored.server, options.server);
-        assert!(restored.destination.is_none());
-    }
-
-    #[test]
-    fn allow_limits_targets_and_rejects_invalid_or_local_options() {
-        let all = (0..MAX_ALLOWED_PRINCIPALS)
-            .map(|i| format!("user-{i}@relay.example"))
-            .collect::<Vec<_>>()
-            .join(",");
-        let options = Options::parse(
-            [
-                "--server",
-                "https://relay.example",
-                "--allow",
-                &all,
-                "--allow",
-                &all,
-            ]
-            .map(OsString::from),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(options.allow.len(), MAX_ALLOWED_PRINCIPALS);
-        let error = Options::parse(
-            [
-                "--server",
-                "https://relay.example",
-                "--allow",
-                &all,
-                "--allow",
-                "another@relay.example",
-            ]
-            .map(OsString::from),
-        )
-        .err()
-        .unwrap();
-        assert!(error.contains("32 distinct"), "{error}");
-        for value in [
-            "",
-            "alice",
-            "root@relay.example",
-            "alice@github",
-            "alice@relay.example,",
-            ",alice@relay.example",
-            "alice@https://relay.example/path",
-        ] {
-            let error = Options::parse(
-                ["--server", "https://relay.example", "--allow", value].map(OsString::from),
-            )
-            .err()
-            .unwrap();
-            assert!(error.contains("--allow"), "{error}");
+        for flag in ["--allow", "--allow=other@relay.example"] {
+            let args = ["owner@relay.example", flag, "other@relay.example"].map(OsString::from);
+            assert!(
+                Options::parse_new(args.clone())
+                    .err()
+                    .unwrap()
+                    .contains("/allow add")
+            );
+            let mut saved = base.session_spec().unwrap();
+            saved
+                .args
+                .extend([flag.into(), "other@relay.example".into()]);
+            assert!(
+                Options::parse_saved(&saved)
+                    .err()
+                    .unwrap()
+                    .contains("/allow add")
+            );
+            assert!(Options::parse(args).err().unwrap().contains("/allow add"));
         }
-        assert!(
-            Options::parse(["--allow"].map(OsString::from))
-                .err()
-                .unwrap()
-                .contains("requires USER@SERVER")
-        );
-        assert!(
-            Options::parse(["--list-tools", "--allow", "alice@relay.example"].map(OsString::from))
-                .err()
-                .unwrap()
-                .contains("cannot be used with --list-tools")
-        );
     }
 
     #[test]

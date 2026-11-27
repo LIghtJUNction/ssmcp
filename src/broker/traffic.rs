@@ -113,7 +113,7 @@ impl Broker {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::{
         history::{AuditConfig, AuditLog},
@@ -126,14 +126,18 @@ mod tests {
     use std::{os::unix::fs::MetadataExt, path::PathBuf, sync::Arc};
     use tokio::io::BufReader;
 
-    struct Temporary(PathBuf);
+    pub(in crate::broker) struct Temporary(PathBuf);
     impl Drop for Temporary {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
-    async fn fixture() -> (Temporary, Arc<Broker>) {
+    pub(in crate::broker) async fn fixture() -> (Temporary, Arc<Broker>) {
+        fixture_with_commerce(false).await
+    }
+
+    async fn fixture_with_commerce(billing: bool) -> (Temporary, Arc<Broker>) {
         let mut random = [0u8; 16];
         getrandom::fill(&mut random).unwrap();
         let directory = Temporary(
@@ -141,6 +145,9 @@ mod tests {
         );
         let mut broker = Broker::new("https://ssmcp.test".into());
         broker.portal = Portal::open(&directory.0).unwrap();
+        if billing {
+            broker.portal.enable_test_commerce(&directory.0, "test");
+        }
         broker
             .portal
             .storage(|store| {
@@ -156,7 +163,11 @@ mod tests {
             .await
             .unwrap();
         broker.configure_management(
-            ManagementPolicy::new(vec!["999".into()], Default::default()).unwrap(),
+            ManagementPolicy::new(
+                vec!["999".into()],
+                [("alice-ssh".into(), "123".into())].into(),
+            )
+            .unwrap(),
             Arc::new(AuditLog::open(&directory.0.join("audit"), AuditConfig::default()).unwrap()),
         );
         (directory, Arc::new(broker))
@@ -351,6 +362,101 @@ mod tests {
         }
     }
 
+    async fn register(
+        broker: &Arc<Broker>,
+        user: &str,
+    ) -> (
+        Frame,
+        BufReader<tokio::io::DuplexStream>,
+        tokio::task::JoinHandle<crate::Result<()>>,
+    ) {
+        let (stream, mut peer) = tokio::io::duplex(8192);
+        let server = tokio::spawn(broker.clone().attach_stream(stream, user.into(), None));
+        wire::write_frame(&mut peer, &hello()).await.unwrap();
+        let mut peer = BufReader::new(peer);
+        let reply = wire::read_frame(&mut peer).await.unwrap().unwrap();
+        (reply, peer, server)
+    }
+
+    #[tokio::test]
+    async fn account_storage_without_billing_accepts_two_free_sessions() {
+        let (_directory, broker) = fixture().await;
+        let (left, right) = tokio::join!(register(&broker, "gh-123"), register(&broker, "gh-123"));
+        assert!(matches!(left.0, Frame::Ready { .. }) && matches!(right.0, Frame::Ready { .. }));
+        drop((left.1, right.1));
+        left.2.await.unwrap().unwrap();
+        right.2.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn free_admission_is_atomic_across_ssh_names_and_released_on_disconnect() {
+        let (_directory, broker) = fixture_with_commerce(true).await;
+        broker.user_policies.apply_account(
+            "123",
+            false,
+            Some(crate::user_policy::RECHARGED_RATE_LIMIT_BPS),
+            false,
+        );
+        let (left, right) =
+            tokio::join!(register(&broker, "gh-123"), register(&broker, "alice-ssh"));
+        let ((ready, peer, server), (rejected, rejected_peer, rejected_server)) =
+            if matches!(&left.0, Frame::Ready { .. }) {
+                (left, right)
+            } else {
+                (right, left)
+            };
+        assert!(matches!(ready, Frame::Ready { .. }));
+        assert!(
+            matches!(rejected, Frame::Reject { message } if message.starts_with("online_session_limit:"))
+        );
+        drop(rejected_peer);
+        rejected_server.await.unwrap().unwrap();
+
+        let (bob, bob_peer, bob_server) = register(&broker, "gh-456").await;
+        assert!(matches!(bob, Frame::Ready { .. }));
+        drop(peer);
+        server.await.unwrap().unwrap();
+        let (retry, retry_peer, retry_server) = register(&broker, "alice-ssh").await;
+        assert!(matches!(retry, Frame::Ready { .. }));
+        drop((retry_peer, bob_peer));
+        retry_server.await.unwrap().unwrap();
+        bob_server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_recorded_recharge_unlocks_sessions_immediately_and_after_restart() {
+        let (directory, broker) = fixture_with_commerce(true).await;
+        let (first, peer, server) = register(&broker, "gh-123").await;
+        assert!(matches!(first, Frame::Ready { .. }));
+        broker.record_recharge("123").await.unwrap();
+        let mut connections = vec![(peer, server)];
+        for _ in 0..wire::MAX_CLIENTS_PER_USER {
+            let (frame, peer, server) = register(&broker, "gh-123").await;
+            assert!(matches!(frame, Frame::Ready { .. }));
+            connections.push((peer, server));
+        }
+        for (peer, server) in connections {
+            drop(peer);
+            server.await.unwrap().unwrap();
+        }
+        drop(broker);
+
+        let mut reopened = Broker::new("https://ssmcp.test".into());
+        reopened.portal = Portal::open(&directory.0).unwrap();
+        reopened.portal.enable_test_commerce(&directory.0, "test");
+        reopened
+            .configure_user_policies(crate::user_policy::DEFAULT_RATE_LIMIT_BPS)
+            .await
+            .unwrap();
+        let reopened = Arc::new(reopened);
+        let (left, right) =
+            tokio::join!(register(&reopened, "gh-123"), register(&reopened, "gh-123"));
+        assert!(matches!(left.0, Frame::Ready { .. }) && matches!(right.0, Frame::Ready { .. }));
+        drop((left.1, right.1));
+        left.2.await.unwrap().unwrap();
+        right.2.await.unwrap().unwrap();
+    }
+
     #[tokio::test]
     async fn quota_account_mode_rejects_unowned_legacy_before_registration() {
         let (_directory, broker) = fixture().await;
@@ -359,7 +465,7 @@ mod tests {
         wire::write_frame(&mut peer, &hello()).await.unwrap();
         let mut peer = BufReader::new(peer);
         assert!(matches!(wire::read_frame(&mut peer).await.unwrap(),
-            Some(Frame::Reject { message }) if message.contains("ssmcp client login")));
+            Some(Frame::Reject { message }) if message.starts_with("device_verification_required:")));
         server.await.unwrap().unwrap();
         assert!(broker.online_session("old-ssh").await.is_none());
     }

@@ -88,6 +88,41 @@ class EventTests(unittest.TestCase):
                 release.event_mode("workflow_dispatch", "refs/heads/main", {"inputs": inputs})
 
 
+    def test_release_checks_are_isolated_but_standalone_ci_reuses_its_ref(self):
+        import re
+
+        workflows = Path(__file__).resolve().parents[1] / ".github/workflows"
+        release_workflow = (workflows / "release.yml").read_text()
+        call = release_workflow.split("  checks:\n", 1)[1].split("\n  gui:", 1)[0]
+        self.assertIn("    uses: ./.github/workflows/ci.yml\n", call)
+        self.assertIn("      release_run_id: ${{ github.run_id }}\n", call)
+        ci = (workflows / "ci.yml").read_text()
+        dispatch, reusable = ci.split("  workflow_call:\n", 1)
+        self.assertNotIn("release_run_id:", dispatch)
+        self.assertIn("      release_run_id:\n", reusable.split("\npermissions:", 1)[0])
+        concurrency = ci.split("\nconcurrency:\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("  cancel-in-progress: true", concurrency)
+        template = next(line.removeprefix("  group: ") for line in concurrency.splitlines()
+                        if line.startswith("  group: "))
+
+        def group(workflow, run_id, revision):
+            values = {"github.workflow": workflow, "inputs.release_run_id": run_id,
+                      "inputs.ref": revision, "github.ref": "refs/heads/main"}
+            return re.sub(r"\$\{\{ (.*?) \}\}", lambda match: next(
+                values[key] for key in match[1].split(" || ") if values[key]), template)
+
+        revision = "a" * 40
+        self.assertNotEqual(group("Release", "101", revision), group("Release", "102", revision))
+        self.assertEqual(group("CI", "", revision), f"ci-CI-{revision}")
+        self.assertEqual(group("CI", "", ""), "ci-CI-refs/heads/main")
+
+    def test_release_gui_call_can_read_actions_artifacts(self):
+        workflows = Path(__file__).resolve().parents[1] / ".github/workflows"
+        release_workflow = (workflows / "release.yml").read_text()
+        call = release_workflow.split("  gui:\n", 1)[1].split("\n  build:", 1)[0]
+        self.assertIn("    uses: ./.github/workflows/gui-clients.yml\n", call)
+        self.assertIn("    permissions:\n      contents: read\n      actions: read\n", call)
+
     def test_only_publication_is_serialized_across_release_tags(self):
         workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/release.yml").read_text()
         before, publication = workflow.split("  publish_release:\n", 1)
@@ -895,6 +930,7 @@ class ReleaseTests(unittest.TestCase):
             archive.with_suffix(".zip.sha256").write_text(f"{release.digest(archive)}  {archive.name}\n")
 
         for invalid, message in (({"bin/ssmcp": b"host binary"}, "AArch64"),
+                                 ({"webroot/open.js": b"obsolete"}, "webroot"),
                                  ({"module.prop": b"id=ssmcp\nversion=v0.10.40"}, "version")):
             stage(invalid)
             with self.assertRaisesRegex(ValueError, message):

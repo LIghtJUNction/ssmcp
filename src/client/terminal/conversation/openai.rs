@@ -12,6 +12,7 @@ const LINK_USAGE: &str = "Use /chatgpt set <URL>, /chatgpt open, /chatgpt copy, 
 pub(super) struct Panel {
     owner: Option<HistoryOwner>,
     text: String,
+    client_update: bool,
 }
 
 enum LinkOutcome {
@@ -101,7 +102,11 @@ fn panel_text(command: &str, record: Option<&store::Saved>) -> String {
 impl State {
     pub(super) fn chat_show_local_text(&mut self, text: String) {
         let owner = (!self.preview).then(saved::current_owner).flatten();
-        self.conversation.openai_panel = Some(Panel { owner, text });
+        self.conversation.openai_panel = Some(Panel {
+            owner,
+            text,
+            client_update: false,
+        });
         self.conversation.about = false;
         self.conversation.plugin_help = false;
         self.conversation.help_scroll = 0;
@@ -136,7 +141,11 @@ impl State {
                     .transpose()?
                     .flatten();
                 let text = panel_text(command, record.as_ref());
-                self.conversation.openai_panel = Some(Panel { owner, text });
+                self.conversation.openai_panel = Some(Panel {
+                    owner,
+                    text,
+                    client_update: false,
+                });
                 self.conversation.help_scroll = 0;
                 self.help = true;
                 self.conversation.content_focus = true;
@@ -157,6 +166,39 @@ impl State {
             self.geometry.left,
             &self.ui,
         ))
+    }
+
+    pub(super) fn chat_show_client_update(&mut self, check: bool) {
+        let action = if check || cfg!(target_os = "android") {
+            "Checking for updates…"
+        } else {
+            "Checking for and applying available updates…"
+        };
+        self.chat_show_local_text(format!("SSMCP update · Esc closes\n\n{action}"));
+        if let Some(panel) = self.conversation.openai_panel.as_mut() {
+            panel.client_update = true;
+        }
+        self.notice = None;
+    }
+
+    pub(in crate::client::terminal) fn chat_finish_client_update(
+        &mut self,
+        summary: &str,
+        details: &str,
+    ) -> bool {
+        let Some(panel) = self.conversation.openai_panel.as_mut() else {
+            return false;
+        };
+        if !self.help
+            || !panel.client_update
+            || panel.owner != (!self.preview).then(saved::current_owner).flatten()
+        {
+            return false;
+        }
+        panel.text = format!("SSMCP update · Esc closes\n\n{summary}\n\n{details}");
+        self.conversation.help_scroll = 0;
+        self.dirty = true;
+        true
     }
 }
 
@@ -196,6 +238,26 @@ mod tests {
                 ..Ui::default()
             },
         )
+    }
+
+    #[test]
+    fn update_panel_keeps_the_result_readable_without_reopening_a_closed_panel() {
+        let mut view = crate::client::terminal::preview_state(20, 40, &Ui::default());
+        view.chat_show_client_update(true);
+        assert!(
+            view.chat_openai_rows()
+                .unwrap()
+                .join("\n")
+                .contains("Checking")
+        );
+        assert!(view.chat_finish_client_update(
+            "Module update available",
+            "Install the ZIP in KernelSU or Magisk, then reboot."
+        ));
+        let rows = view.chat_openai_rows().unwrap().join("\n");
+        assert!(rows.contains("Module update available") && rows.contains("KernelSU"));
+        view.help = false;
+        assert!(!view.chat_finish_client_update("Another update", ""));
     }
 
     #[test]

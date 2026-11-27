@@ -188,6 +188,7 @@ fn comparison_code_alone_cannot_authorize_and_decisions_are_owner_bound() {
         client_name: "test".into(),
         requested_username: None,
         registration_only: false,
+        device_only: false,
         expires: Instant::now() + TTL,
         decision: Decision::Pending,
         last_poll: None,
@@ -838,4 +839,77 @@ async fn public_account_shows_default_and_updates_own_announcement() {
         .unwrap();
     assert_eq!(updated["announcement"], "Welcome alice-notices");
     assert_eq!(updated["server_announcement"], "System message");
+}
+
+#[tokio::test]
+async fn device_oauth_binds_the_browser_account_and_issues_one_device_only_credential() {
+    let fixture = Fixture::new().await;
+    fixture
+        .broker
+        .portal
+        .storage(|store| store.claim_handle("123", "alice-home"))
+        .await
+        .unwrap();
+    let start = || {
+        fixture
+            .client
+            .post(format!("{}/api/client/login/start", fixture.base))
+            .json(&json!({"name":"controlled laptop","username":"alice-home","device_only":true}))
+            .send()
+    };
+    let response: Value = start()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = response["device_code"].as_str().unwrap();
+    let code = response["user_code"].as_str().unwrap();
+    let (other, csrf) = fixture.session("456");
+    assert!(
+        !fixture
+            .consent(&other, &csrf, code, "allow")
+            .await
+            .status()
+            .is_redirection()
+    );
+    let (_, denied) = poll_client(&fixture, secret).await;
+    assert!(denied.get("device_token").is_none() && denied.get("access_token").is_none());
+    let response: Value = start()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let secret = response["device_code"].as_str().unwrap();
+    let code = response["user_code"].as_str().unwrap();
+    let (cookie, csrf) = fixture.session("123");
+    let page = fixture
+        .client
+        .get(format!("{}/setup?code={code}", fixture.base))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(page.contains("授权这台设备") && page.contains("alice-home"));
+    assert_eq!(
+        fixture
+            .consent(&cookie, &csrf, code, "allow")
+            .await
+            .status(),
+        303
+    );
+    let (status, allowed) = poll_client(&fixture, secret).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(allowed["identity"]["subject"], "123");
+    assert!(allowed["device_token"].as_str().unwrap().starts_with("cd_"));
+    assert!(allowed.get("access_token").is_none());
+    assert_eq!(poll_client(&fixture, secret).await.1["status"], "expired");
 }

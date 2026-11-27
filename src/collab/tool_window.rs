@@ -123,6 +123,36 @@ impl ToolWindow {
             count == 0 && quiet >= Duration::from_millis(WINDOW_MS),
         )
     }
+
+    pub(super) fn calls_per_minute(&self, now: Instant) -> [u64; 10] {
+        const MINUTE_MS: u64 = 60_000;
+
+        let elapsed = self.elapsed_ms(now);
+        let mut buckets = [0; 10];
+        for second in self.seconds.iter().rev() {
+            let age = elapsed.saturating_sub(second.index * 1000);
+            let Ok(minute) = usize::try_from(age / MINUTE_MS) else {
+                break;
+            };
+            let Some(newer_bucket) = buckets.len().checked_sub(minute) else {
+                break;
+            };
+            // At most one minute boundary crosses a retained second. Calls
+            // exactly on that boundary belong to the older minute.
+            let newer = if minute > 0 && age % MINUTE_MS < 999 {
+                second.after((age % MINUTE_MS) as u16)
+            } else {
+                0
+            };
+            if newer_bucket > 0 {
+                buckets[newer_bucket - 1] += second.total - newer;
+            }
+            if minute > 0 {
+                buckets[newer_bucket] += newer;
+            }
+        }
+        buckets
+    }
 }
 
 #[cfg(test)]
@@ -149,6 +179,22 @@ mod tests {
         window.record(start + ms(WINDOW_MS * 2 + 20));
         assert_eq!(window.measure(start + ms(WINDOW_MS * 2 + 20)), (1, false));
         assert!(window.seconds.len() <= 2);
+    }
+
+    #[test]
+    fn histogram_counts_the_same_calls_as_the_rolling_window() {
+        let start = Instant::now();
+        let mut window = ToolWindow::new(start);
+        let ms = Duration::from_millis;
+        window.record(start);
+        assert_eq!(window.calls_per_minute(start)[9], 1);
+        for offset in [1, 60_123, 60_124, 600_123] {
+            window.record(start + ms(offset));
+        }
+        let now = start + ms(600_123);
+        let buckets = window.calls_per_minute(now);
+        assert_eq!(buckets, [1, 1, 0, 0, 0, 0, 0, 0, 0, 1]);
+        assert_eq!(buckets.iter().sum::<u64>(), window.measure(now).0);
     }
 
     #[test]

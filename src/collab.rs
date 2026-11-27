@@ -361,7 +361,10 @@ impl Hub {
             .collect())
     }
 
-    pub(crate) fn worker_activity(&self) -> Result<Vec<crate::wire::WorkerMemberActivity>, String> {
+    pub(crate) fn worker_activity(
+        &self,
+        include_histogram: bool,
+    ) -> Result<Vec<crate::wire::WorkerMemberActivity>, String> {
         let state = self.locked()?;
         let now = Instant::now();
         Ok(state
@@ -372,6 +375,8 @@ impl Hub {
                 crate::wire::WorkerMemberActivity {
                     agent_id: agent.id.clone(),
                     tool_calls_10m,
+                    calls_per_minute: include_histogram
+                        .then(|| agent.tool_window.calls_per_minute(now)),
                     offline,
                 }
             })

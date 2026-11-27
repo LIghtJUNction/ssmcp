@@ -248,7 +248,7 @@ class Daemon(Harness):
         return identity
 
     def daemon_arguments(self, name, *, watchdog):
-        arguments = ["--daemon", "--server", self.origin, "--username", self.identity["username"],
+        arguments = [f"{self.identity['username']}@{self.origin}", "--daemon",
                      "--no-setup", "--name", name,
                      "--title", "daemon lifecycle validation", "--shell", "/bin/sh"]
         if watchdog:
@@ -488,14 +488,16 @@ class Daemon(Harness):
 
     def run(self):
         self.prepare()
+        self.account_gateway.authorize_device(self.environment)
         primary, peer = self.names
         self.case = "D01"
+        destination = f"{self.identity['username']}@{self.origin}"
         for arguments, diagnostic in (
-            (["--no-watchdog", "--reconnect-delay", "2", "--server", self.origin],
+            ([destination, "--no-watchdog", "--reconnect-delay", "2"],
              "--reconnect-delay cannot be combined with --no-watchdog"),
-            (["--watchdog", "--reconnect-delay", "0", "--server", self.origin],
+            ([destination, "--watchdog", "--reconnect-delay", "0"],
              "--reconnect-delay must be in 1..=3600 seconds"),
-            (["--watchdog", "--reconnect-delay", "3601", "--server", self.origin],
+            ([destination, "--watchdog", "--reconnect-delay", "3601"],
              "--reconnect-delay must be in 1..=3600 seconds"),
             (["--daemon", "--list-tools"],
              "--list-tools cannot be combined with --daemon"),
@@ -797,7 +799,7 @@ def main():
     started = time.monotonic()
     report = {"status": "blocked", "platform": platform.system(), "manager": "systemd-user",
               "source_revision": arguments.revision, "checks": [],
-              "scope": "actual Linux user-manager lifecycle + real account WebSocket router over loopback HTTP + OAuth PKCE + MCP; no Harness/model request or installation",
+              "scope": "actual Linux user-manager lifecycle + real account WebSocket router over loopback TLS + OAuth PKCE + MCP; no Harness/model request or installation",
               "not_covered": ["macOS launchd actual lifecycle", "Windows Task Scheduler actual lifecycle",
                               "cross-platform CI", "external GitHub service and public TLS termination", "logout/reboot startup"],
               "configured_reconnect_delay_seconds": arguments.reconnect_delay}

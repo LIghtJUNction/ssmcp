@@ -571,7 +571,6 @@ impl OAuth {
 
     /// Delegate only a verified account's existing resource and fixed access
     /// lifetime. This snapshots under the OAuth lock and performs no storage I/O.
-    #[cfg(test)]
     pub(crate) fn delegation(
         &self,
         user: &str,
@@ -2070,8 +2069,8 @@ fn consent_page(
     if transaction.user != "mcp" {
         let (instruction, lifetime) = match transaction.view {
             ViewContext::Remote => (
-                "也可粘贴本机 ssmcp 显示的一次性登录码，控制同一本地系统用户下未设置 --allow 的会话。",
-                "登录码只使用一次。提供该登录码的连接断开后，本次授权立即失效。设置了 --allow 的会话只接受其允许的第三方身份。",
+                "如果已验证的 SSH 会话显示了一次性登录码，可在此授权客户端访问该系统用户下使用登录码的会话。",
+                "登录码只使用一次。提供该登录码的 SSH 连接断开后，本次授权立即失效。",
             ),
             ViewContext::Local => (
                 "此授权用于当前终端的本地会话，无需远程账号或 GitHub 登录。",
@@ -2085,7 +2084,7 @@ fn consent_page(
     let (title, instruction) = match transaction.view {
         ViewContext::Remote => (
             "连接你的会话",
-            "使用会话允许的账号登录，再确认是否授权此客户端。",
+            "使用会话允许的账号登录，再确认是否授权此客户端。设备启动者在被控端完成设备登录，上线后可用 /allow add 用户名 共享当前会话。",
         ),
         ViewContext::Local => (
             "连接本地会话",
@@ -2609,7 +2608,9 @@ mod tests {
         let form = consent(&remote, registered["client_id"].as_str().unwrap());
         let html = consent_page(&form.id, &form.transaction, None, &["github"], None, None);
         assert!(html.contains("使用会话允许的账号登录"));
-        assert!(html.contains("--allow"));
+        assert!(html.contains("/allow add 用户名"));
+        assert!(!html.contains("--allow"));
+        assert!(html.contains("已验证的 SSH 会话"));
         assert!(html.contains("返回账户门户"));
         assert!(html.contains("href=\"/\""));
     }

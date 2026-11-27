@@ -12,7 +12,15 @@ async fn connected(
 ) -> (Socket, Arc<Session>) {
     let token = match subject {
         Some(subject) => Some(fixture.token(subject).await),
-        None => None,
+        None => Some(
+            fixture
+                .broker
+                .portal
+                .client_storage(|store| store.device_login("42".into()))
+                .await
+                .unwrap()
+                .0,
+        ),
     };
     let mut request = fixture.request(token.as_deref(), true);
     if offers_messages {

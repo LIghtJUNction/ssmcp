@@ -14,6 +14,9 @@ on:
         default: false
   workflow_call:
     inputs:
+      release_run_id:
+        description: Isolate the checks of this release run from other runs validating the same commit
+        type: string
       ref:
         description: Exact commit to validate for a release
         required: false
@@ -28,7 +31,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ inputs.ref || github.ref }}
+  group: ci-${{ github.workflow }}-${{ inputs.release_run_id || inputs.ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -139,13 +142,37 @@ jobs:
         if: matrix.runner == 'ubuntu-24.04'
         run: python3 scripts/collect_native_validation_kit.py capture --identity "$RUNNER_TEMP/native-validation-source.json"
       - run: cargo fmt --all -- --check
+      - name: Build the frontend session core and isolated loopback test client
+        id: frontend_core
+        run: make account-fixture-client
+      - name: Verify browser first use and explicit CLI targets
+        run: python3 scripts/e2e_frontend_launch.py --client target/account-fixture-bin/ssmcp
+      - name: Verify independent frontend sessions and working directories
+        if: ${{ !cancelled() && steps.frontend_core.outcome == 'success' }}
+        run: python3 scripts/e2e_workbench_sessions.py --binary target/account-fixture-bin/ssmcp
+      - name: Build fixtures for the isolated chat and station tests
+        id: focused_fixtures
+        if: ${{ !cancelled() && steps.frontend_core.outcome == 'success' && matrix.runner == 'ubuntu-24.04' }}
+        run: |
+          cargo build --locked --bins --example vt_snapshot
+          fixture=$(cargo test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')
+          echo "fixture=$fixture" >> "$GITHUB_OUTPUT"
+      - name: Verify targeted retirement with three real private PTYs
+        if: ${{ !cancelled() && steps.focused_fixtures.outcome == 'success' }}
+        run: |
+          python3 scripts/e2e_worker_windows.py --case targeted-retirement --bin-dir target/account-fixture-bin \
+            --fixture-binary "${{ steps.focused_fixtures.outputs.fixture }}" --source-revision "$(git rev-parse HEAD)" \
+            --report "$RUNNER_TEMP/ssmcp-worker-windows-targeted/report.json"
+      - name: Verify two restricted chat sessions on the real account router
+        if: ${{ !cancelled() && steps.focused_fixtures.outcome == 'success' }}
+        run: python3 scripts/e2e_magisk_chat.py --client target/account-fixture-bin/ssmcp --fixture-binary "${{ steps.focused_fixtures.outputs.fixture }}"
       - name: Check release tooling and installer
         run: |
           shellcheck scripts/install.sh scripts/ci_user_manager.sh
           python3 scripts/test_release.py
           python3 scripts/test_setup_server.py
           python3 scripts/test_installer_download_bounds.py
-          SSMCP_UPSTREAM_INSTALLER="$PWD/scripts/install.sh" python3 scripts/test_termux_install.py
+          python3 scripts/test_termux_install.py
           python3 scripts/test_collect_native_validation_kit.py
       - name: Check JavaScript orchestration helpers
         run: make test-code-mode
@@ -182,7 +209,7 @@ jobs:
           cargo test --locked --test context_helpers -- --ignored --test-threads=1
       - name: Exercise runtime under installed service restrictions
         run: |
-          runtime_test="$(cargo test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"
+          runtime_test="$(cargo test --locked --lib --features e2e-loopback-ca --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"
           printf 'SSMCP_E2E_FIXTURE_BINARY=%s\n' "$(realpath "$runtime_test")" >> "$GITHUB_ENV"
           sudo install -Dm0755 "$runtime_test" /usr/local/bin/ssmcp-runtime-test
           sudo install -Dm0644 src/code_mode.js /usr/local/libexec/ssmcp/code-mode.js
@@ -224,29 +251,29 @@ jobs:
             exit 1
           fi
       - name: Exercise account WebSocket, OAuth, HTTP and PTY
-        run: python3 scripts/e2e.py --bin-dir target/debug
-      - name: Exercise account login, allow lists, revocation and logout
-        run: python3 scripts/e2e_account_relay.py --binary target/debug/ssmcp --report "$RUNNER_TEMP/ssmcp-account-relay-report.json"
+        run: python3 scripts/e2e.py --bin-dir target/account-fixture-bin
+      - name: Exercise device OAuth, allow lists and revocation over verified loopback TLS
+        run: python3 scripts/e2e_account_relay.py --binary target/account-fixture-bin/ssmcp --report "$RUNNER_TEMP/ssmcp-account-relay-report.json"
       - name: Exercise account names and alias grants through real HTTP
-        run: python3 scripts/e2e_account_names.py --bin-dir target/debug --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" --report "$RUNNER_TEMP/ssmcp-account-names-report.json"
+        run: python3 scripts/e2e_account_names.py --bin-dir target/account-fixture-bin --fixture-binary "$SSMCP_E2E_FIXTURE_BINARY" --report "$RUNNER_TEMP/ssmcp-account-names-report.json"
       - name: Exercise session title, reload and output artifacts
-        run: python3 scripts/e2e_session_features.py --bin-dir target/debug
+        run: python3 scripts/e2e_session_features.py --bin-dir target/account-fixture-bin
       - name: Exercise native PTY and exact tool catalog through account WebSocket and OAuth
-        run: python3 scripts/e2e_agents.py --bin-dir target/debug
+        run: python3 scripts/e2e_agents.py --bin-dir target/account-fixture-bin
       - name: Exercise unified execution, audit and connection isolation
         run: |
           python3 scripts/test_e2e_unified.py
-          python3 scripts/e2e_unified.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-unified-report.json" --revision "$(git rev-parse HEAD)"
+          python3 scripts/e2e_unified.py --bin-dir target/account-fixture-bin --report "$RUNNER_TEMP/ssmcp-unified-report.json" --revision "$(git rev-parse HEAD)"
       - name: Exercise terminal dashboard and Git observer through a real PTY
-        run: python3 scripts/e2e_dashboard.py --bin-dir target/debug --report "$RUNNER_TEMP/ssmcp-dashboard-report.json"
+        run: python3 scripts/e2e_dashboard.py --bin-dir target/account-fixture-bin --report "$RUNNER_TEMP/ssmcp-dashboard-report.json"
       - name: Exercise command Statistics through a real PTY
-        run: python3 scripts/e2e_input_history.py --command-stats --bin-dir target/debug --out "$RUNNER_TEMP/ssmcp-command-stats"
+        run: python3 scripts/e2e_input_history.py --command-stats --bin-dir target/account-fixture-bin --out "$RUNNER_TEMP/ssmcp-command-stats"
       - name: Exercise conversation UI and account relay request queues
         run: make test-client-ui
       - name: Exercise background sessions and watchdog with real user systemd
         timeout-minutes: 8
         run: |
-          python3 scripts/e2e_daemon.py --bin-dir target/debug --timeout 300 \
+          python3 scripts/e2e_daemon.py --bin-dir target/account-fixture-bin --timeout 300 \
             --report "$RUNNER_TEMP/ssmcp-daemon-report.json" --revision "$(git rev-parse HEAD)"
       - name: Save unified acceptance evidence
         if: always()
@@ -255,6 +282,9 @@ jobs:
           name: unified-acceptance-${{ matrix.runner }}
           path: |
             ${{ runner.temp }}/ssmcp-unified-report*
+            ${{ runner.temp }}/ssmcp-worker-windows-targeted/report.json
+            ${{ runner.temp }}/ssmcp-worker-windows-targeted/report-evidence/*.json
+            ${{ runner.temp }}/ssmcp-worker-windows-targeted/report-evidence/*.png
             ${{ runner.temp }}/ssmcp-dashboard-report*
             ${{ runner.temp }}/ssmcp-command-stats/
             ${{ runner.temp }}/ssmcp-account-relay-report.json
@@ -294,6 +324,25 @@ jobs:
           test -x "$RUNNER_TEMP/ssmcp-install/usr/local/bin/ssmcpd"
           test -f "$RUNNER_TEMP/ssmcp-install/usr/lib/systemd/system/ssmcpd.service"
           test -f "$RUNNER_TEMP/ssmcp-install/usr/local/libexec/ssmcp/code-mode.js"
+      - name: Select Node for the portal browser test
+        if: ${{ !cancelled() && steps.focused_fixtures.outcome == 'success' }}
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - name: Sign back into a GitHub account using a bound passkey
+        if: ${{ !cancelled() && steps.focused_fixtures.outcome == 'success' }}
+        env:
+          PORTAL_TEST_BINARY: ${{ steps.focused_fixtures.outputs.fixture }}
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ssmcp-browser" --no-save --no-package-lock --no-audit --no-fund playwright@1.65.1
+          export PLAYWRIGHT_MODULE="$RUNNER_TEMP/ssmcp-browser/node_modules/playwright"
+          node "$PLAYWRIGHT_MODULE/cli.js" install --with-deps chromium
+          test_name=portal::tests::chromium_passkey_signs_back_into_the_same_github_account
+          "$PORTAL_TEST_BINARY" --list --ignored > "$RUNNER_TEMP/ssmcp-portal-ignored-tests.txt"
+          grep -Fx "$test_name: test" "$RUNNER_TEMP/ssmcp-portal-ignored-tests.txt"
+          for fallback in 0 1; do
+            PASSKEY_TEST_FALLBACK="$fallback" "$PORTAL_TEST_BINARY" "$test_name" --exact --ignored --nocapture
+          done
       - name: Freeze the successful Linux x86_64 validation kit
         if: success() && matrix.runner == 'ubuntu-24.04'
         run: |
@@ -383,6 +432,30 @@ jobs:
           & "$PWD/scripts/test_installer_helpers.ps1"
           & "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -File "$PWD/scripts/test_installer_helpers.ps1"
           if ($LASTEXITCODE -ne 0) { throw "Windows PowerShell installer helper tests failed" }
+      - name: Build and test the zgpui desktop on macOS
+        if: runner.os == 'macOS'
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+        run: |
+          cargo test --locked --manifest-path apps/ssmcp-desktop/Cargo.toml
+          cargo build --locked --manifest-path apps/ssmcp-desktop/Cargo.toml
+          target/debug/ssmcp-desktop --help
+          if ! launchctl print "gui/$(id -u)" >/dev/null 2>&1; then
+            echo "No GUI login session on this runner; native build and tests completed."
+            exit 0
+          fi
+          python3 - <<'PY'
+          import json, os, subprocess, tempfile
+          from pathlib import Path
+          with tempfile.TemporaryDirectory(dir=os.environ["RUNNER_TEMP"]) as directory:
+              receipt = Path(directory) / "frame.json"
+              env = {**os.environ, "SSMCP_AUTH_HOME": str(Path(directory) / "auth")}
+              subprocess.run(["target/debug/ssmcp-desktop", "--exit-after-ms", "1000",
+                              "--first-frame-receipt", str(receipt)], env=env, timeout=20, check=True)
+              frame = json.loads(receipt.read_text())
+              if frame["stage"] != "present_returned" or min(frame["width"], frame["height"]) <= 0:
+                  raise RuntimeError(f"macOS launcher returned an invalid first-frame receipt: {frame}")
+          PY
       - name: Check Unix streaming download bounds
         if: runner.os == 'macOS'
         run: python3 scripts/test_installer_download_bounds.py

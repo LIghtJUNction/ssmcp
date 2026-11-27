@@ -248,7 +248,35 @@ impl Host for BoundHost<'_> {
             description: "Actual backend presence, registry summary and live event cursor".into(),
         }];
         let mut commands = Vec::new();
-        if let Some(runtime) = runtime {
+        let access_client = crate::client::web_chat::identity()
+            .map(|peer| peer.client_id.as_str())
+            .or_else(|| {
+                runtime
+                    .as_ref()
+                    .and_then(|runtime| runtime.frontend_client_id())
+            });
+        if mode == Mode::Control
+            && access_client.is_some_and(crate::client::access::frontend_available)
+        {
+            commands.push(Command {
+                id: id("session.access"),
+                description: "List or edit access to this live session and return the relay's acknowledged access list".into(),
+                input_schema: json!({"type":"object","additionalProperties":false,"properties":{
+                    "arguments":{"type":"string","maxLength":1024}},"required":["arguments"]}),
+            });
+        }
+        if crate::client::web_chat::identity().is_some() {
+            for name in ["conversation", "threads", "chat.queue"] {
+                resources.push(Resource {
+                    id: id(name),
+                    schema_version: 1,
+                    description: name.into(),
+                });
+            }
+            if mode == Mode::Control {
+                commands.push(chat::command());
+            }
+        } else if let Some(runtime) = runtime {
             runtime.local_registry().ensure_open().map_err(native)?;
             resources.push(Resource {
                 id: id("time"),
@@ -291,7 +319,28 @@ impl Host for BoundHost<'_> {
                     description:"Actual worker registration and bounded station state; query offset and limit (1..32), with logs omitted".into() });
             }
             if mode == Mode::Control {
+                if let Some(workbench) = runtime.local_shell().workbench() {
+                    commands.push(Command {
+                        id: id("session.cd"),
+                        description: "Set the default directory for commands, new terminals and child sessions within this session's workspace".into(),
+                        input_schema: json!({"type":"object","additionalProperties":false,"properties":{
+                            "path":{"type":"string","minLength":1,"maxLength":4096}},"required":["path"]}),
+                    });
+                    if workbench.can_create() {
+                        commands.push(Command {
+                            id: id("session.new"),
+                            description: "Start a new independent session at the current directory on the same relay and return its exact local attach target".into(),
+                            input_schema: json!({"type":"object","additionalProperties":false,"properties":{}}),
+                        });
+                    }
+                }
                 commands.extend(execution::commands());
+                commands.push(Command {
+                    id: id("client.update"),
+                    description: "Check or update the client on the backend host using its normal verified updater. Requires an explicit mode; does not reload a session.".into(),
+                    input_schema: json!({"type":"object","additionalProperties":false,
+                        "properties":{"check":{"type":"boolean"}},"required":["check"]}),
+                });
                 commands.push(Command { id:id("terminal.write"),
                     description:"Write explicit UTF-8 input to one real terminal under the exclusive local input lease; never automatically retry a lost receipt".into(),
                     input_schema:json!({"type":"object","additionalProperties":false,
@@ -325,6 +374,37 @@ impl Host for BoundHost<'_> {
     fn state(&self, resource: Id, query: Value) -> HostFuture<'_, State> {
         Box::pin(async move {
             self.authorize(Access::Observe)?;
+            if let Some(peer) = crate::client::web_chat::identity() {
+                let value = match resource.as_str() {
+                    "runtime" => {
+                        no_query(query)?;
+                        let cursor = self
+                            .capture
+                            .ring
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .next;
+                        json!({"backend_active":true,"backend_generation":Counter(peer.generation),
+                            "live_cursor":Counter(cursor), "retention":"live_process_memory",
+                            "process_id":std::process::id(), "client_id":peer.client_id})
+                    }
+                    "threads" | "chat.queue" | "conversation" => {
+                        chat::state_for(self, &peer.client_id, resource.as_str(), query)?
+                    }
+                    _ => {
+                        return Err(BridgeError::new(
+                            ErrorCode::Denied,
+                            "device resource unavailable in chat",
+                        ));
+                    }
+                };
+                return Ok(State {
+                    resource,
+                    schema_version: 1,
+                    revision: None,
+                    value,
+                });
+            }
             let value = match resource.as_str() {
                 "runtime" => {
                     no_query(query)?;
@@ -347,7 +427,7 @@ impl Host for BoundHost<'_> {
                         .next;
                     json!({"backend_active":runtime.is_some(),"backend_generation":Counter(self.backend_generation),
                         "native_capabilities":capabilities,"live_cursor":Counter(cursor),"retention":"live_process_memory",
-                        "process_id":std::process::id(),"client_id":runtime.as_ref().and_then(|value|value.frontend_client_id())})
+                        "process_id":std::process::id(),"cwd":runtime.as_ref().map(|value|value.local_shell().cwd()),"client_id":runtime.as_ref().and_then(|value|value.frontend_client_id())})
                 }
                 "time" => {
                     no_query(query)?;
@@ -441,6 +521,51 @@ impl Host for BoundHost<'_> {
     fn command(&self, command: Id, arguments: Value) -> HostFuture<'_, CommandResult> {
         Box::pin(async move {
             self.authorize(Access::Control)?;
+            if command.as_str() == "session.access" {
+                #[derive(Deserialize)]
+                #[serde(deny_unknown_fields)]
+                struct AccessArgs {
+                    arguments: String,
+                }
+                let args: AccessArgs = serde_json::from_value(arguments)
+                    .map_err(|_| BridgeError::invalid("invalid session access arguments"))?;
+                if args.arguments.len() > 1024 {
+                    return Err(BridgeError::invalid("session access arguments too long"));
+                }
+                let runtime = self.optional_runtime()?;
+                let client_id = crate::client::web_chat::identity()
+                    .map(|peer| peer.client_id.as_str())
+                    .or_else(|| {
+                        runtime
+                            .as_ref()
+                            .and_then(|runtime| runtime.frontend_client_id())
+                    })
+                    .ok_or_else(|| native("no connected relay session".into()))?;
+                use crate::client::access::{FrontendError, frontend_command};
+                let result = frontend_command(client_id, &args.arguments).await.map_err(
+                    |error| match error {
+                        FrontendError::Rejected(message) => BridgeError::invalid(&message),
+                        FrontendError::Unknown => native(
+                            "server receipt unavailable; use /allow list to verify access".into(),
+                        )
+                        .uncertain(),
+                    },
+                )?;
+                return Ok(CommandResult {
+                    command,
+                    value: json!(result),
+                });
+            }
+            if let Some(peer) = crate::client::web_chat::identity() {
+                if command.as_str() != "chat.send" {
+                    return Err(BridgeError::new(
+                        ErrorCode::Denied,
+                        "device command unavailable in chat",
+                    ));
+                }
+                let value = chat::send_to(self, &peer.client_id, peer.generation, arguments)?;
+                return Ok(CommandResult { command, value });
+            }
             let runtime = self.runtime()?;
             runtime.local_registry().ensure_open().map_err(native)?;
             let value = match command.as_str() {
@@ -499,7 +624,33 @@ impl Host for BoundHost<'_> {
                 "exec.start" | "exec.cancel" => {
                     execution::perform(self, &runtime, command.as_str(), arguments).await?
                 }
+                "session.cd" | "session.new" => {
+                    let shell = runtime.local_shell();
+                    let view = shell
+                        .workbench()
+                        .ok_or_else(|| native("Session not initialized".into()))?;
+                    if command.as_str() == "session.cd" {
+                        #[derive(Deserialize)]
+                        #[serde(deny_unknown_fields)]
+                        struct ChangeDirectory {
+                            path: String,
+                        }
+                        let args: ChangeDirectory = serde_json::from_value(arguments)
+                            .map_err(|_| BridgeError::invalid("Expected a directory path"))?;
+                        json!({"cwd":view.cd(&args.path).map_err(BridgeError::invalid)?})
+                    } else {
+                        no_query(arguments)?;
+                        view.create().await.map_err(|e| native(e.to_string()))?
+                    }
+                }
                 "chat.send" => chat::send(self, &runtime, arguments)?,
+                "client.update" => {
+                    let args: ClientUpdate = serde_json::from_value(arguments)
+                        .map_err(|_| BridgeError::invalid("invalid client.update arguments"))?;
+                    crate::client::frontend_update(args.check)
+                        .await
+                        .map_err(native)?
+                }
                 _ => {
                     return Err(BridgeError::new(
                         ErrorCode::Denied,
@@ -510,6 +661,12 @@ impl Host for BoundHost<'_> {
             Ok(CommandResult { command, value })
         })
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClientUpdate {
+    check: bool,
 }
 
 #[derive(Deserialize)]
@@ -546,7 +703,12 @@ fn worker_state(
     mut snapshot: crate::worker::Snapshot,
     query: WorkerQuery,
 ) -> Result<Value, BridgeError> {
+    let productivity = snapshot.productivity.as_ref().map(|activity| {
+        json!({"members":activity.members, "calls_per_minute":activity.calls_per_minute.map(Counter),
+            "plot":activity.plot()})
+    });
     let count = snapshot.slots.len();
+    let dreaming = snapshot.slots.iter().filter(|slot| slot.dreaming).count();
     let offset = usize::from(query.offset);
     if offset > count {
         return Err(BridgeError::invalid(
@@ -557,6 +719,8 @@ fn worker_state(
     let mut slots = Vec::new();
     for slot in snapshot.slots.drain(offset..end) {
         slots.push(json!({"slot":slot.slot,"epoch":Counter(slot.epoch),"state":slot.state,
+            "display_state":slot.display_state(),
+            "quiet_10m":slot.tool_calls_10m.map(|_| slot.quiet_10m()),
             "task_id":slot.task_id,"reason":slot.reason,"registered":slot.registered,
             "retire_requested":slot.retire_requested,"task_summary":slot.task_summary,
             "last_command":slot.last_command,"progress":slot.progress,
@@ -575,9 +739,11 @@ fn worker_state(
         json!({"process_id":snapshot.process_id,"pool_generation":snapshot.generation,"manager":manager,
         "total":snapshot.total,"desired_total":snapshot.desired_total,"idle":snapshot.idle,
         "working":snapshot.working,"offline":snapshot.offline,"retiring":snapshot.retiring,
+        "dreaming":dreaming,
         "registered_workers":snapshot.registered_workers,"queued":snapshot.queued,
         "closed":snapshot.closed,"stopping":snapshot.stopping,"slots":slots,"slot_count":count,
-        "offset":offset,"next_offset":(end<count).then_some(end),"logs_omitted":true}),
+        "offset":offset,"next_offset":(end<count).then_some(end),"logs_omitted":true,
+        "productivity":productivity}),
     )
 }
 

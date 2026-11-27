@@ -8,8 +8,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, VecDeque},
     future::Future,
@@ -31,8 +32,71 @@ use zbridge::{
 
 use crate::session::attach::{EventObserver, MAX_OBSERVATION_MS};
 
-pub(super) type CoreFuture<'a, T> =
-    Pin<Box<dyn Future<Output = Result<T, BridgeError>> + Send + 'a>>;
+pub(super) type CoreFuture<'a, T, E = BridgeError> =
+    Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
+
+use crate::session::frontend::RelayAdmissionDenial;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) struct RelayRefusal {
+    pub(super) code: RelayAdmissionDenial,
+    pub(super) relay_origin: String,
+    pub(super) effect: zbridge::Effect,
+}
+
+impl RelayRefusal {
+    pub(super) fn from_destination(
+        code: RelayAdmissionDenial,
+        destination: &str,
+        effect: zbridge::Effect,
+    ) -> Option<Self> {
+        let (_, relay_origin) = crate::server_endpoint::parse_target(destination).ok()?;
+        Some(Self {
+            code,
+            relay_origin,
+            effect,
+        })
+    }
+
+    fn response(self) -> Response {
+        let status = match self.code {
+            RelayAdmissionDenial::TrafficQuotaExceeded => StatusCode::PAYMENT_REQUIRED,
+            RelayAdmissionDenial::OnlineSessionLimit => StatusCode::CONFLICT,
+        };
+        let stage = match self.effect {
+            zbridge::Effect::None => "本次会话未创建。",
+            zbridge::Effect::MayHaveOccurred => "中继拒绝连接，会话及先前操作状态待核对。",
+        };
+        let message = format!("{}{stage}", self.code);
+        (status, Json(json!({"error":{"code":self.code,"relay_origin":self.relay_origin,"message":message,"effect":self.effect}}))).into_response()
+    }
+}
+
+/// Existing durable creation receipts contain the serialized BridgeError itself.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(super) enum CreationError {
+    #[serde(rename = "relay_refusal")]
+    Relay(RelayRefusal),
+    #[serde(untagged)]
+    Bridge(BridgeError),
+}
+
+impl std::fmt::Display for CreationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bridge(error) => std::fmt::Display::fmt(error, f),
+            Self::Relay(reason) => std::fmt::Display::fmt(&reason.code, f),
+        }
+    }
+}
+
+impl std::error::Error for CreationError {}
+
+impl From<BridgeError> for CreationError {
+    fn from(error: BridgeError) -> Self {
+        Self::Bridge(error)
+    }
+}
 
 pub(super) trait Connection: Send + Sync {
     fn request(&self, request: BridgeRequest) -> CoreFuture<'_, BridgeResponse>;
@@ -40,6 +104,45 @@ pub(super) trait Connection: Send + Sync {
 }
 
 pub(super) trait Host: Send + Sync {
+    fn launch(&self, _destination: String) -> CoreFuture<'_, String, CreationError> {
+        Box::pin(async {
+            Err(BridgeError::new(ErrorCode::Denied, "session launch is unavailable").into())
+        })
+    }
+    fn relay_refusal(&self, _session: &str, _settle: bool) -> CoreFuture<'_, Option<RelayRefusal>> {
+        Box::pin(async { Ok(None) })
+    }
+    fn retains_target(&self, _session: &str) -> bool {
+        true
+    }
+    fn receipt_directory(&self) -> Option<&std::path::Path> {
+        None
+    }
+    fn authorize_creation(&self, _destination: &str) -> Result<(), BridgeError> {
+        Err(BridgeError::new(
+            ErrorCode::Denied,
+            "this gateway does not create owned sessions",
+        ))
+    }
+    fn pending_device_authorization(
+        &self,
+        _destination: &str,
+    ) -> Result<Option<Value>, BridgeError> {
+        Ok(None)
+    }
+    fn create(&self, _destination: String) -> CoreFuture<'_, String, CreationError> {
+        Box::pin(async {
+            Err(BridgeError::new(ErrorCode::Denied, "owned sessions are disabled").into())
+        })
+    }
+    fn end_owned(&self, _session: String) -> CoreFuture<'_, ()> {
+        Box::pin(async {
+            Err(BridgeError::new(
+                ErrorCode::Denied,
+                "owned sessions are disabled",
+            ))
+        })
+    }
     fn sessions(&self) -> CoreFuture<'_, Vec<Value>>;
     fn connect(&self, session: String, read_only: bool) -> CoreFuture<'_, Arc<dyn Connection>>;
 }
@@ -64,6 +167,7 @@ struct Gateway {
     assets: Option<PathBuf>,
     host: Arc<dyn Host>,
     data: Mutex<Data>,
+    creations: Mutex<Vec<CreationReceipt>>,
     next_connection: AtomicU64,
     requests: Semaphore,
 }
@@ -139,7 +243,18 @@ fn event_wait() -> u16 {
 }
 
 #[derive(Debug)]
-struct ApiError(StatusCode, BridgeError);
+enum ApiError {
+    Bridge(StatusCode, BridgeError),
+    Relay(RelayRefusal),
+}
+impl From<CreationError> for ApiError {
+    fn from(error: CreationError) -> Self {
+        match error {
+            CreationError::Bridge(error) => Self::from(error),
+            CreationError::Relay(reason) => Self::Relay(reason),
+        }
+    }
+}
 impl From<BridgeError> for ApiError {
     fn from(error: BridgeError) -> Self {
         let status = match error.code {
@@ -153,12 +268,15 @@ impl From<BridgeError> for ApiError {
             ErrorCode::TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        Self(status, error)
+        Self::Bridge(status, error)
     }
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"error":self.1}))).into_response()
+        match self {
+            Self::Bridge(status, error) => (status, Json(json!({"error":error}))).into_response(),
+            Self::Relay(reason) => reason.response(),
+        }
     }
 }
 fn invalid(message: &str) -> ApiError {
@@ -220,10 +338,18 @@ pub(super) fn routes(
         assets,
         host,
         data: Mutex::new(Data::default()),
+        creations: Mutex::new(Vec::new()),
         next_connection: AtomicU64::new(1),
         requests: Semaphore::new(32),
     });
     let api = Router::new()
+        .route("/api/gui/v1/launch", get(launch_status).post(launch))
+        .route("/api/gui/v1/owned-sessions", post(create_owned))
+        .route(
+            "/api/gui/v1/owned-sessions/{session}",
+            axum::routing::delete(end_owned),
+        )
+        .route("/api/gui/v1/register", post(register))
         .route("/api/gui/v1/sessions", get(sessions))
         .route("/api/gui/v1/connections", get(connections).post(open))
         .route("/api/gui/v1/connections/{id}", axum::routing::delete(close))
@@ -263,7 +389,7 @@ async fn guard(State(state): State<Arc<Gateway>>, request: Request, next: Next) 
             .flatten()
             .and_then(|value| value.as_bytes().strip_prefix(b"Bearer "));
         if !token.is_some_and(|token| bool::from(token.ct_eq(state.token.as_bytes()))) {
-            return ApiError(
+            return ApiError::Bridge(
                 StatusCode::UNAUTHORIZED,
                 BridgeError::new(ErrorCode::Denied, "gateway pairing is required"),
             )
@@ -271,7 +397,7 @@ async fn guard(State(state): State<Arc<Gateway>>, request: Request, next: Next) 
         }
     }
     let Ok(_permit) = state.requests.try_acquire() else {
-        return ApiError(
+        return ApiError::Bridge(
             StatusCode::TOO_MANY_REQUESTS,
             unavailable("gateway request capacity reached"),
         )
@@ -319,6 +445,8 @@ impl Gateway {
     fn prune(self: &Arc<Self>) {
         let expired = {
             let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
+            data.connections
+                .retain(|_, c| self.host.retains_target(&c.session));
             let now = Instant::now();
             let expired: Vec<_> = data
                 .connections
@@ -352,11 +480,45 @@ impl Gateway {
         }
     }
 
+    fn session_for_connection(&self, id: &str) -> Option<String> {
+        let data = self.data.lock().unwrap_or_else(|e| e.into_inner());
+        data.opens
+            .iter()
+            .find(|r| r.connection_id == id)
+            .map(|r| r.request.session.clone())
+    }
+
+    async fn relay_refusal(&self, session: Option<&str>, settle: bool) -> Option<ApiError> {
+        self.host
+            .relay_refusal(session?, settle)
+            .await
+            .ok()
+            .flatten()
+            .map(ApiError::Relay)
+    }
+
     fn acknowledge_close(&self, id: &str) {
         let mut data = self.data.lock().unwrap_or_else(|e| e.into_inner());
         data.connections.remove(id);
         if let Some(receipt) = data.opens.iter_mut().find(|r| r.connection_id == id) {
             receipt.retained_at = Instant::now();
+        }
+    }
+
+    async fn active_connection(
+        self: &Arc<Self>,
+        id: &str,
+    ) -> Result<(Arc<dyn Connection>, bool), ApiError> {
+        let session = self.session_for_connection(id);
+        if let Some(refusal) = self.relay_refusal(session.as_deref(), false).await {
+            return Err(refusal);
+        }
+        match self.connection(id) {
+            Ok(connection) => Ok(connection),
+            Err(error) => Err(self
+                .relay_refusal(session.as_deref(), true)
+                .await
+                .unwrap_or_else(|| error.into())),
         }
     }
 
@@ -378,6 +540,231 @@ impl Gateway {
         connection.used = Instant::now();
         Ok((connection.core.clone(), connection.read_only))
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LaunchRequest {
+    destination: String,
+    #[serde(default)]
+    terms: bool,
+    #[serde(default)]
+    privacy: bool,
+}
+
+impl LaunchRequest {
+    fn checked_destination(self) -> Result<String, ApiError> {
+        let (name, origin) = crate::server_endpoint::parse_target(&self.destination)
+            .map_err(|_| invalid("enter a valid username@server"))?;
+        let url = reqwest::Url::parse(&origin).map_err(|_| invalid("invalid relay"))?;
+        if url
+            .host_str()
+            .is_some_and(|s| s.trim_end_matches('.') == "ssmcp.lmm.best")
+            && !(self.terms && self.privacy)
+        {
+            return Err(invalid(
+                "confirm the hosted relay's terms and privacy policy",
+            ));
+        }
+        crate::server_endpoint::allow_principal(&name, &origin)
+            .map_err(|_| invalid("invalid destination"))
+    }
+}
+
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct CreateRequest {
+    request_id: Id,
+    destination: String,
+    #[serde(default)]
+    terms: bool,
+    #[serde(default)]
+    privacy: bool,
+}
+struct CreationReceipt {
+    input: CreateRequest,
+    result: tokio::sync::watch::Receiver<Option<Result<String, CreationError>>>,
+}
+#[derive(Serialize, Deserialize)]
+struct SavedCreation {
+    input: CreateRequest,
+    outcome: Option<Result<String, CreationError>>,
+}
+fn check_create_id(prior: &CreateRequest, input: &CreateRequest) -> Result<(), ApiError> {
+    if prior != input {
+        return Err(BridgeError::new(
+            ErrorCode::Conflict,
+            "creation request_id was used with different fields",
+        )
+        .into());
+    }
+    Ok(())
+}
+
+async fn create_owned(
+    State(state): State<Arc<Gateway>>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let input: CreateRequest = input(request).await?;
+    if input.destination.len() > 512 {
+        return Err(invalid("destination exceeds 512 bytes"));
+    }
+    let destination = LaunchRequest {
+        destination: input.destination.clone(),
+        terms: input.terms,
+        privacy: input.privacy,
+    }
+    .checked_destination()?;
+    state.host.authorize_creation(&destination)?;
+    let path = state.host.receipt_directory().map(|dir| {
+        let key = crate::hex::encode(Sha256::digest(input.request_id.as_str().as_bytes()));
+        dir.join(format!("request-{key}.json"))
+    });
+    let mut result = {
+        let mut receipts = state.creations.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(prior) = receipts
+            .iter()
+            .find(|r| r.input.request_id == input.request_id)
+        {
+            check_create_id(&prior.input, &input)?;
+            prior.result.clone()
+        } else {
+            if let Some(path) = &path
+                && path
+                    .try_exists()
+                    .map_err(|_| unavailable("cannot inspect creation receipt"))?
+            {
+                let saved: SavedCreation = crate::session::read_json(path).map_err(|_| {
+                    unavailable("cannot read original creation receipt").uncertain()
+                })?;
+                check_create_id(&saved.input, &input)?;
+                let target = saved.outcome.ok_or_else(|| {
+                    unavailable("unconfirmed original creation; do not repeat").uncertain()
+                })??;
+                return Ok(Json(
+                    json!({"request_id":input.request_id,"session":target}),
+                ));
+            }
+            if let Some(authorization) = state.host.pending_device_authorization(&destination)? {
+                return Ok(Json(
+                    json!({"request_id":input.request_id, "authorization":authorization}),
+                ));
+            }
+            if receipts.len() >= MAX_OPEN_RECEIPTS {
+                return Err(unavailable("too many unresolved creation requests").into());
+            }
+            let mut saved = SavedCreation {
+                input: input.clone(),
+                outcome: None,
+            };
+            if let Some(path) = &path {
+                crate::session::write_json(path, &saved)
+                    .map_err(|_| unavailable("could not reserve creation receipt"))?;
+            }
+            let (tx, rx) = tokio::sync::watch::channel(None);
+            receipts.push(CreationReceipt {
+                input: input.clone(),
+                result: rx.clone(),
+            });
+            let state = state.clone();
+            // Finish the original operation even when the HTTP waiter has disconnected.
+            tokio::spawn(async move {
+                let mut outcome = timeout(NATIVE_DEADLINE, state.host.create(destination))
+                    .await
+                    .unwrap_or_else(|_| {
+                        Err(unavailable("session startup timed out; outcome unknown")
+                            .uncertain()
+                            .into())
+                    });
+                let mut durable = false;
+                if let Some(path) = path {
+                    saved.outcome = Some(outcome.clone());
+                    durable = crate::session::write_json(&path, &saved).is_ok();
+                    if !durable {
+                        outcome = Err(unavailable("could not persist creation outcome")
+                            .uncertain()
+                            .into());
+                    }
+                }
+                let _ = tx.send_replace(Some(outcome));
+                if durable {
+                    state
+                        .creations
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .retain(|r| r.input.request_id != saved.input.request_id);
+                }
+            });
+            rx
+        }
+    };
+    loop {
+        if let Some(outcome) = result.borrow_and_update().clone() {
+            return Ok(Json(
+                json!({"request_id":input.request_id,"session":outcome?}),
+            ));
+        }
+        result
+            .changed()
+            .await
+            .map_err(|_| unavailable("session creator stopped; outcome unknown").uncertain())?;
+    }
+}
+
+async fn end_owned(
+    State(state): State<Arc<Gateway>>,
+    Path(session): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    state.host.end_owned(session.clone()).await?;
+    let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
+    data.connections.retain(|_, c| c.session != session);
+    for receipt in &mut data.opens {
+        if receipt.request.session == session && matches!(receipt.outcome, OpenOutcome::Opening) {
+            receipt.outcome = OpenOutcome::Failed(BridgeError::new(
+                ErrorCode::Closed,
+                "owner ended this session",
+            ));
+        }
+    }
+    Ok(Json(json!({"session":session,"status":"closed"})))
+}
+
+async fn register(
+    State(_): State<Arc<Gateway>>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let destination = input::<LaunchRequest>(request)
+        .await?
+        .checked_destination()?;
+    let url = crate::connection_form::registration_url(&destination)
+        .await
+        .map_err(|e| invalid(&e.to_string()))?;
+    Ok(Json(json!({"url":url})))
+}
+
+async fn launch_status(
+    reason: Option<axum::Extension<RelayRefusal>>,
+) -> Result<Json<Value>, ApiError> {
+    match reason {
+        Some(axum::Extension(reason)) => Err(ApiError::Relay(reason)),
+        None => Ok(Json(json!({"status":"ready"}))),
+    }
+}
+
+async fn launch(
+    State(state): State<Arc<Gateway>>,
+    request: Request,
+) -> Result<Json<Value>, ApiError> {
+    let destination = input::<LaunchRequest>(request)
+        .await?
+        .checked_destination()?;
+    if let Some(authorization) = state.host.pending_device_authorization(&destination)? {
+        return Ok(Json(json!({"authorization":authorization})));
+    }
+    let target = state.host.launch(destination.clone()).await?;
+    crate::connection_form::save_desktop_profile(&destination)
+        .map_err(|e| unavailable(&e.to_string()))?;
+    Ok(Json(json!({"session":target})))
 }
 
 async fn sessions(
@@ -469,6 +856,8 @@ async fn open(State(state): State<Arc<Gateway>>, request: Request) -> Result<Res
     {
         return Err(invalid("invalid saved session name"));
     }
+    // Bind any terminal reason to this owned target, preserving request-ID conflict checks.
+    let refusal = state.relay_refusal(Some(&input.session), false).await;
     state.prune();
     let (connection_id, duplicate, opening) = {
         let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
@@ -484,6 +873,9 @@ async fn open(State(state): State<Arc<Gateway>>, request: Request) -> Result<Res
                 )
                 .into());
             }
+            if let Some(refusal) = refusal {
+                return Err(refusal);
+            }
             data.opens[index].retained_at = Instant::now();
             let previous = &data.opens[index];
             match &previous.outcome {
@@ -494,6 +886,9 @@ async fn open(State(state): State<Arc<Gateway>>, request: Request) -> Result<Res
                 _ => (previous.connection_id.clone(), true, false),
             }
         } else {
+            if let Some(refusal) = refusal {
+                return Err(refusal);
+            }
             let pending = data
                 .opens
                 .iter()
@@ -538,6 +933,15 @@ async fn open(State(state): State<Arc<Gateway>>, request: Request) -> Result<Res
         .and_then(|r| r);
         {
             let mut data = state.data.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(OpenOutcome::Failed(error)) = data
+                .opens
+                .iter()
+                .find(|r| r.request.request_id == input.request_id)
+                .map(|r| &r.outcome)
+            {
+                flight.settled = true;
+                return Err(error.clone().into());
+            }
             data.opens
                 .iter_mut()
                 .find(|r| r.request.request_id == input.request_id)
@@ -572,20 +976,46 @@ async fn open(State(state): State<Arc<Gateway>>, request: Request) -> Result<Res
             }
         }
         flight.settled = true;
-        connected?;
+        if let Err(error) = connected {
+            return Err(state
+                .relay_refusal(Some(&input.session), true)
+                .await
+                .unwrap_or_else(|| error.into()));
+        }
     }
-    let (core, _) = state.connection(&connection_id)?;
+    let (core, _) = match state.connection(&connection_id) {
+        Ok(connection) => connection,
+        Err(error) => {
+            return Err(state
+                .relay_refusal(Some(&input.session), true)
+                .await
+                .unwrap_or_else(|| error.into()));
+        }
+    };
     let request = BridgeRequest {
         version: zbridge::VERSION,
         id: input.request_id,
         operation: Operation::Capabilities {},
     };
-    let capabilities = timeout(NATIVE_DEADLINE, core.request(request.clone()))
+    let capabilities = match timeout(NATIVE_DEADLINE, core.request(request.clone()))
         .await
-        .map_err(|_| unavailable("capability discovery deadline elapsed"))??;
+        .map_err(|_| unavailable("capability discovery deadline elapsed"))
+        .and_then(|r| r)
+    {
+        Ok(response) => response,
+        Err(error) => {
+            return Err(state
+                .relay_refusal(Some(&input.session), true)
+                .await
+                .unwrap_or_else(|| error.into()));
+        }
+    };
     capabilities.validate_for(&request)?;
     if let ResponseBody::Error(error) = &capabilities.body {
-        return Err(error.clone().into());
+        return Err(state
+            .relay_refusal(Some(&input.session), true)
+            .await
+            .unwrap_or_else(|| error.clone().into()));
     }
     Ok((if duplicate {StatusCode::OK} else {StatusCode::CREATED}, Json(json!({"status":"connected","connection_id":connection_id,"session":input.session,"read_only":input.read_only,"capabilities":capabilities,"duplicate":duplicate}))).into_response())
 }
@@ -597,7 +1027,7 @@ async fn bridge(
 ) -> Result<Json<BridgeResponse>, ApiError> {
     let request: BridgeRequest = input(request).await?;
     request.validate()?;
-    let (core, read_only) = state.connection(&id)?;
+    let (core, read_only) = state.active_connection(&id).await?;
     let command = request.operation.is_command();
     if command && read_only {
         // This denial happens before native dispatch, so its effect is known.
@@ -619,6 +1049,10 @@ async fn bridge(
             response.validate_for(&request)?;
             Ok(response)
         });
+    if (result.is_err() || result.as_ref().is_ok_and(|r| matches!(&r.body, ResponseBody::Error(error) if matches!(error.code, ErrorCode::Closed | ErrorCode::Unavailable))))
+        && let Some(refusal) = state.relay_refusal(state.session_for_connection(&id).as_deref(),true).await {
+        return Err(refusal);
+    }
     let response = match result {
         Ok(response) => response,
         Err(error) => BridgeResponse {
@@ -637,7 +1071,7 @@ async fn events(
     request: Request,
 ) -> Result<Json<Value>, ApiError> {
     let input: ObserveRequest = input(request).await?;
-    let (core, _) = state.connection(&id)?;
+    let (core, _) = state.active_connection(&id).await?;
     let mut observer = EventObserver::new(input.generation.clone(), input.cursor);
     let page = observer
         .wait_with(
@@ -646,7 +1080,16 @@ async fn events(
             input.wait_ms,
             |request| core.request(request),
         )
-        .await?;
+        .await;
+    let page = match page {
+        Ok(page) => page,
+        Err(error) => {
+            return Err(state
+                .relay_refusal(state.session_for_connection(&id).as_deref(), true)
+                .await
+                .unwrap_or_else(|| error.into()));
+        }
+    };
     let reply = json!({"schema":"ssmcp-gui-events-v1","request_id":input.request_id,"generation":input.generation,"page":page});
     zbridge::encoded_len(&reply, zbridge::MAX_FRAME_BYTES)?;
     Ok(Json(reply))
@@ -743,6 +1186,7 @@ async fn serve_asset(state: Arc<Gateway>, path: String) -> Response {
             "app.mjs",
             "src/client.mjs",
             "src/gateway.mjs",
+            "src/gateway-feedback.mjs",
             "src/presentation.mjs",
             "src/protocol.mjs",
             "src/store.mjs",

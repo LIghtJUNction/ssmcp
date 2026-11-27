@@ -1,4 +1,5 @@
 //! Owner-launched, loopback-only Android configuration and session console.
+mod entry;
 mod frame;
 
 use axum::{
@@ -29,9 +30,8 @@ use crate::{
 
 const STATUS_ENV: &str = "SSMCP_MAGISK_CONNECTED";
 const CONSENT: &str = "root-consent-v1";
-const RC: &str = include_str!("../../packaging/magisk/src/ssmcp/ssmcp.rc");
 const ONBOARDING: &str = include_str!("../../packaging/magisk/src/ssmcp/onboarding/index.html");
-const STYLE: &str = include_str!("../../packaging/magisk/src/ssmcp/webroot/console.css");
+const STYLE: &str = include_str!("../../packaging/magisk/assets/console.css");
 
 struct ScreenState {
     parser: vt100::Parser,
@@ -162,12 +162,12 @@ impl Sessions {
 
 struct Console {
     dir: PathBuf,
-    token: String,
+    device_token: String,
     host: String,
     sessions: tokio::sync::Mutex<Sessions>,
 }
 
-fn rc_target(text: &str) -> Result<(String, String)> {
+fn rc_target(text: &str) -> Result<(&str, String)> {
     let mut lines = text
         .lines()
         .map(str::trim)
@@ -177,28 +177,30 @@ fn rc_target(text: &str) -> Result<(String, String)> {
         .ok_or("Expected ssmcp username@server in ssmcp.rc")?;
     let mut words = line.split_ascii_whitespace();
     match (words.next(), words.next(), words.next(), lines.next()) {
-        (Some("ssmcp"), Some(target), None, None) => parse_target(target),
+        (Some("ssmcp"), Some(target), None, None) => {
+            let (name, server) = parse_target(target)?;
+            Ok((target, allow_principal(&name, &server)?))
+        }
         _ => Err("Expected one ssmcp username@server line in ssmcp.rc".into()),
     }
 }
 
 fn saved_target(dir: &Path) -> Result<Option<String>> {
     let rc = std::fs::read_to_string(dir.join("ssmcp.rc"))?;
-    let Ok((name, server)) = rc_target(&rc) else {
+    let Ok((written, target)) = rc_target(&rc) else {
         return Ok(None);
     };
-    let target = allow_principal(&name, &server)?;
-    let consent = std::fs::read_to_string(dir.join(CONSENT)).unwrap_or_default();
-    Ok((consent == target).then_some(target))
+    // A valid command in this root-owned private file explicitly selects this
+    // relay. The placeholder shipped with the module always opens local setup.
+    // The module hook compares this marker to the spelling in the owner's rc.
+    write_private(&dir.join(CONSENT), written.as_bytes())?;
+    Ok(Some(target))
 }
 
 fn save(dir: &Path, name: &str, server: &str) -> Result<String> {
     let target = allow_principal(name, server)?;
-    let (comments, _) = RC
-        .rsplit_once("\nssmcp ")
-        .ok_or("missing rc template target")?;
     for (file, contents) in [
-        ("ssmcp.rc", format!("{comments}\nssmcp {target}\n")),
+        ("ssmcp.rc", format!("ssmcp {target}\n")),
         (CONSENT, target.clone()),
     ] {
         let staging = dir.join(format!(".{file}.new"));
@@ -220,19 +222,19 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn authorized(state: &Console, headers: &HeaderMap) -> bool {
+fn authorized(host: &str, secret: &str, headers: &HeaderMap) -> bool {
     headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
-        == Some(&state.host)
+        == Some(host)
         && headers
             .get(header::ORIGIN)
-            .is_none_or(|value| value.as_bytes() == format!("http://{}", state.host).as_bytes())
+            .is_none_or(|value| value.as_bytes() == format!("http://{host}").as_bytes())
         && headers
             .get(header::AUTHORIZATION)
             .and_then(|value| value.to_str().ok())
             .and_then(|value| value.strip_prefix("Bearer "))
-            .is_some_and(|token| bool::from(token.as_bytes().ct_eq(state.token.as_bytes())))
+            .is_some_and(|token| bool::from(token.as_bytes().ct_eq(secret.as_bytes())))
 }
 
 fn failure(status: StatusCode, message: impl ToString) -> Response {
@@ -252,7 +254,7 @@ async fn configure(
     headers: HeaderMap,
     Json(input): Json<Setup>,
 ) -> Response {
-    if !authorized(&state, &headers) {
+    if !authorized(&state.host, &state.device_token, &headers) {
         return failure(
             StatusCode::UNAUTHORIZED,
             "Open the console from the Magisk module action.",
@@ -319,12 +321,41 @@ enum Action {
     },
 }
 
+/// Select only the boot process started by this module, even when other tabs exist.
+async fn boot_session(State(state): State<Arc<Console>>, headers: HeaderMap) -> Response {
+    if !authorized(&state.host, &state.device_token, &headers) {
+        return failure(StatusCode::UNAUTHORIZED, "Open the module WebUI to pair.");
+    }
+    let pid = state
+        .sessions
+        .lock()
+        .await
+        .tabs
+        .get(&0)
+        .and_then(|tab| tab.child.process_id());
+    let Some(pid) = pid else {
+        return Json(json!({"session": null})).into_response();
+    };
+    let root = state.dir.join("sessions");
+    match tokio::task::spawn_blocking(move || crate::session::frontend::target_for_pid(&root, pid))
+        .await
+    {
+        Ok(Ok(target)) => {
+            Json(json!({"session": target.map(|(target, _)| target)})).into_response()
+        }
+        _ => failure(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Could not read the boot session.",
+        ),
+    }
+}
+
 async fn terminal(
     State(state): State<Arc<Console>>,
     headers: HeaderMap,
     Json(action): Json<Action>,
 ) -> Response {
-    if !authorized(&state, &headers) {
+    if !authorized(&state.host, &state.device_token, &headers) {
         return failure(
             StatusCode::UNAUTHORIZED,
             "Open the console from the Magisk module action.",
@@ -353,10 +384,7 @@ fn terminal_action(state: &Console, action: Action) -> Result<Value> {
                 .transpose()?
                 .map(|(_, server)| format!("{server}/mcp"));
             let rc = std::fs::read_to_string(state.dir.join("ssmcp.rc"))?;
-            let configured = rc_target(&rc)
-                .ok()
-                .map(|(name, server)| allow_principal(&name, &server))
-                .transpose()?;
+            let configured = rc_target(&rc).ok().map(|(_, target)| target);
             return Ok(
                 json!({"target": sessions.target, "tabs": tabs, "mcp": mcp, "configured": configured}),
             );
@@ -432,6 +460,22 @@ fn javascript(source: &'static str) -> Response {
         .into_response()
 }
 
+fn pairing_token() -> Result<String> {
+    let mut bytes = [0; 32];
+    getrandom::fill(&mut bytes)?;
+    Ok(crate::hex::encode(bytes))
+}
+
+fn publish_pairing(dir: &Path, name: &str, url: &str) -> Result<()> {
+    let staged = dir.join(format!(".{name}.new"));
+    write_private(
+        &staged,
+        format!("{}\n{url}\n", std::process::id()).as_bytes(),
+    )?;
+    std::fs::rename(staged, dir.join(name))?;
+    Ok(())
+}
+
 pub(super) async fn run(args: &[OsString]) -> Result<()> {
     let [dir, port] = args else {
         return Err("Expected state directory and port".into());
@@ -450,29 +494,33 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
             let _ = std::fs::remove_file(entry.path());
         }
     }
-    let mut bytes = [0; 32];
-    getrandom::fill(&mut bytes)?;
-    let token = crate::hex::encode(&bytes);
-    let gui = crate::session::gui::foreground_workbench(
-        dir.join("sessions"),
+    // The module's CLI and browser have different registries and credentials.
+    // A paired workbench cannot authorize the device setup or terminal routes.
+    let web_token = pairing_token()?;
+    let device_token = pairing_token()?;
+    let web_workspace = dir.join("web-workspace");
+    std::fs::create_dir_all(&web_workspace)?;
+    let gui = crate::session::gui::foreground_chat_workbench(
+        dir.join("web-sessions"),
+        web_workspace,
         format!("http://{host}"),
-        token.clone(),
+        web_token.clone(),
     )?;
     let mut sessions = Sessions::default();
     if let Some(target) = saved_target(&dir)? {
         sessions.open(&target, &dir)?;
         sessions.target = Some(target);
     }
-    let path = dir.join("console.url");
-    let staged = dir.join(".console.url.new");
-    write_private(
-        &staged,
-        format!("{}\nhttp://{host}/#{token}\n", std::process::id()).as_bytes(),
+    publish_pairing(
+        &dir,
+        "setup.url",
+        &format!("http://{host}/setup#{device_token}"),
     )?;
-    std::fs::rename(staged, path)?;
+    publish_pairing(&dir, "console.url", &format!("http://{host}/#{web_token}"))?;
+    entry::publish(&host, &web_token)?;
     let state = Arc::new(Console {
         dir,
-        token,
+        device_token,
         host,
         sessions: tokio::sync::Mutex::new(sessions),
     });
@@ -481,7 +529,7 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
             javascript(include_str!("../../packaging/magisk/src/ssmcp/onboarding/setup.js"))
         }))
         .route("/device-api.js", get(|| async {
-            javascript(include_str!("../../packaging/magisk/src/ssmcp/webroot/device-api.js"))
+            javascript(include_str!("../../packaging/magisk/assets/device-api.js"))
         }))
         .route("/console.css", get(|| async {
             ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], STYLE)
@@ -489,8 +537,9 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
         .route("/setup", get(|| async { Html(ONBOARDING) }).post(configure))
          .route("/zuse", get(|| async {
             ([(header::CONTENT_SECURITY_POLICY, "default-src 'none'; style-src 'self'; frame-src http://127.0.0.1:43497; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")],
-                Html(include_str!("../../packaging/magisk/src/ssmcp/webroot/workbench.html")))
+                Html(include_str!("../../packaging/magisk/assets/workbench.html")))
         }))
+        .route("/api/gui/v1/boot-session", get(boot_session))
         .route("/terminal", post(terminal))
         .layer(DefaultBodyLimit::max(24 * 1024))
         .layer(axum::middleware::map_response(|mut response: Response| async {
@@ -506,4 +555,66 @@ pub(super) async fn run(args: &[OsString]) -> Result<()> {
         .with_graceful_shutdown(crate::session::gui::shutdown())
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod rc_tests {
+    use super::rc_target;
+
+    #[test]
+    fn module_action_and_device_setup_have_separate_private_credentials() {
+        use super::{authorized, pairing_token, publish_pairing};
+        use axum::http::{HeaderMap, header};
+        use std::os::unix::fs::PermissionsExt;
+
+        let web = pairing_token().unwrap();
+        let device = pairing_token().unwrap();
+        assert_ne!(web, device);
+        let host = "127.0.0.1:42387";
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, host.parse().unwrap());
+        headers.insert(header::ORIGIN, format!("http://{host}").parse().unwrap());
+        assert!(!authorized(host, &device, &headers));
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {web}").parse().unwrap(),
+        );
+        assert!(!authorized(host, &device, &headers));
+        headers.insert(
+            header::AUTHORIZATION,
+            format!("Bearer {device}").parse().unwrap(),
+        );
+        assert!(authorized(host, &device, &headers));
+        headers.insert(header::ORIGIN, "https://other.example".parse().unwrap());
+        assert!(!authorized(host, &device, &headers));
+        headers.remove(header::ORIGIN);
+        headers.insert(header::HOST, "other.example".parse().unwrap());
+        assert!(!authorized(host, &device, &headers));
+
+        let dir =
+            std::env::temp_dir().join(format!("ssmcp-magisk-pair-{}", pairing_token().unwrap()));
+        std::fs::create_dir(&dir).unwrap();
+        for (name, url) in [
+            ("console.url", format!("http://{host}/#{web}")),
+            ("setup.url", format!("http://{host}/setup#{device}")),
+        ] {
+            publish_pairing(&dir, name, &url).unwrap();
+            let file = dir.join(name);
+            let metadata = std::fs::metadata(&file).unwrap();
+            assert_eq!(metadata.permissions().mode() & 0o077, 0);
+            let contents = std::fs::read_to_string(&file).unwrap();
+            assert!(contents == format!("{}\n{url}\n", std::process::id()));
+            std::fs::remove_file(file).unwrap();
+        }
+        std::fs::remove_dir(dir).unwrap();
+    }
+
+    #[test]
+    fn manual_rc_preserves_the_owner_spelling_and_normalizes_the_connection() {
+        let (written, target) = rc_target("# phone\nssmcp Alice@https://relay.example\n").unwrap();
+        assert_eq!(written, "Alice@https://relay.example");
+        assert_eq!(target, "alice@relay.example");
+        assert!(rc_target("ssmcp <USERNAME>@ssmcp.lmm.best").is_err());
+        assert!(rc_target("ssmcp alice@relay.example\nssmcp bob@relay.example").is_err());
+    }
 }

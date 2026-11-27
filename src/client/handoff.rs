@@ -6,6 +6,8 @@ use super::{
 use serde_json::{Value, json};
 use std::{fmt::Write as _, path::Path};
 
+pub(crate) mod clipboard;
+
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const MAX_NOTE_BYTES: usize = 16 * 1024;
 const MAX_ITEM_BYTES: usize = 16 * 1024;

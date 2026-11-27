@@ -33,7 +33,7 @@ fn account(subject: &str, login: &str) -> ControlAccount {
 }
 
 fn verified(root: &Path, relay: &str, account: &ControlAccount, when: u64) -> Result<Decision> {
-    verified_at(root, relay, account, &"b".repeat(64), when)
+    verified_at(root, relay, account, &"b".repeat(64), when, false)
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn journal_distinguishes_connections_and_decisions_and_coalesces_tool_calls() {
     let first = "1".repeat(64);
     let second = "2".repeat(64);
     let record = |identity: &ControlAccount, id: &str, when| {
-        verified_at(&f.0, RELAY, identity, id, when).unwrap()
+        verified_at(&f.0, RELAY, identity, id, when, false).unwrap()
     };
     assert_eq!(record(&a, &first, 10), Decision::Default);
     assert_eq!(record(&a, &first, 80), Decision::Default);
@@ -234,6 +234,7 @@ fn simultaneous_first_contacts_create_exactly_one_default() {
                             login: "same-name",
                             connection: &"a".repeat(64),
                             previous_outcome: None,
+                            session_grant: false,
                         },
                     )
                     .unwrap()
@@ -276,4 +277,28 @@ fn unreadable_invalid_or_missing_initialized_policy_never_bootstraps_again() {
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(verified(&f.0, RELAY, &a, 60).is_err());
     }
+}
+
+#[test]
+fn a_session_grant_cannot_bootstrap_or_override_device_wide_access() {
+    let fixture = Fixture::new();
+    let guest = account("2", "guest");
+    let verify_guest = |when, session_grant| {
+        verified_at(
+            &fixture.0,
+            RELAY,
+            &guest,
+            &"c".repeat(64),
+            when,
+            session_grant,
+        )
+    };
+    assert!(verify_guest(1, true).is_err());
+    assert!(fixture.entries().is_empty());
+    verified(&fixture.0, RELAY, &account("1", "owner"), 2).unwrap();
+    assert!(verify_guest(3, true).unwrap().allowed_here(true));
+    assert_eq!(fixture.entries()[1].status, Decision::Pending);
+    assert!(!verify_guest(4, false).unwrap().allowed_here(false));
+    decide_at(&fixture.0, RELAY, "github", "2", false).unwrap();
+    assert!(!verify_guest(5, true).unwrap().allowed_here(true));
 }

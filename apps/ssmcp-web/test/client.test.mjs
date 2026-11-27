@@ -178,6 +178,22 @@ test('chat.send owns one immutable explicit submission ID and confirms queue adm
   assert.equal(client.timeline.rows.some(row => row.text.includes('模型已读')), false);
 });
 
+test('session.access displays only the accounts in a matching native receipt', async () => {
+  const entries = [{ principal: 'owner@relay.example', subject: '1', owner: true },
+    { principal: 'list@relay.example', subject: '2', owner: false }];
+  for (const [snapshot, expected] of [[{ entries }, 'confirmed'], [{ entries: [{}] }, 'unknown']]) {
+    const { client, calls } = harness({ caps: capabilities({ commands: ['session.access'] }), bridge: request => {
+      if (request.operation.op === 'command') return response(request, { command: 'session.access', value: snapshot });
+    } });
+    const record = await client.command('session.access', { arguments: 'add list' });
+    assert.equal(record.status, expected);
+    const sent = calls.filter(([kind, request]) => kind === 'bridge' && request.operation.op === 'command');
+    assert.equal(sent.length, 1);
+    assert.deepEqual(sent[0][1].operation.arguments, { arguments: 'add list' });
+    assert.equal(client.timeline.rows.some(row => row.text.includes('list@relay.example')), expected === 'confirmed');
+  }
+});
+
 test('abortable backoff cancels promptly without waiting for a timer', async () => {
   const controller = new AbortController();
   const pending = abortableDelay(30000, controller.signal); controller.abort();

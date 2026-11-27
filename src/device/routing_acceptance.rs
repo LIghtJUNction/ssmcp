@@ -98,6 +98,8 @@ impl AddressFixture {
             })
             .await
             .unwrap();
+        // The routing fixture keeps a fleet of verified devices online under this account.
+        broker.record_recharge("123").await.unwrap();
         let (owner, stranger) = broker
             .portal
             .client_storage(|store| {

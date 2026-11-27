@@ -32,7 +32,7 @@
       <details open><summary>Linux / macOS</summary><pre><code>curl -fsSL https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.sh | sh</code></pre></details>
       <details><summary>Windows PowerShell</summary><pre><code>irm https://github.com/LIghtJUNction/ssmcp/releases/latest/download/install.ps1 | iex</code></pre></details>
       <p class="next-step">安装后运行 <code>ssmcp --version</code>。能看到客户端版本，再继续下一步。</p></li>
-    <li><h3>在项目目录里连接</h3><p>在要处理的文件夹中打开终端，把 <code>yourname</code> 换成控制者在该中继的用户名，然后运行：</p><pre><code>ssmcp yourname@{{gateway_authority}}</code></pre><p>控制者可在中继账户页面查看或修改用户名。设备连接时无需账号登录。</p><p class="next-step">保持这个终端运行。以后可以直接运行 <code>ssmcp</code> 复用已保存的连接配置；需要查看账户时，打开<a href="/">账户门户</a>。</p></li>
+    <li><h3>在项目目录里连接</h3><p>在要处理的文件夹中打开终端，把 <code>yourname</code> 换成控制者在该中继的用户名，然后运行：</p><pre><code>ssmcp yourname@{{gateway_authority}}</code></pre><p>控制者可在中继账户页面查看或修改用户名。设备连接时无需账号登录。</p><p class="next-step">保持这个终端运行。下次连接时再次输入同一条命令。需要查看账户时，打开<a href="/">账户门户</a>。</p></li>
     <li><h3>把中继添加到 AI 应用</h3><p>在应用的 MCP 连接设置中填写下面的地址，并授权同一个 GitHub 账户。</p><pre><code>{{gateway_origin}}/mcp</code></pre><p>例如在 <a href="https://chatgpt.com/plugins">ChatGPT Plugins</a> 中选择 Add，填写 Name 与 Connection，按界面提示完成 Create 和授权。</p><p class="next-step">回到对话，让 AI 列出在线客户端，核对电脑与工作目录后再开始任务。列表为空时，先看<a href="#help">连接排查</a>。</p></li>
   </ol>
 </section>
@@ -41,7 +41,7 @@
   <p>由被控设备的用户在愿意开放的项目目录中主动运行客户端。把 <code>yourname</code> 换成控制者在同一中继上已注册的用户名。被控端无需登录账号，也无需服务器邀请码。控制者仍须登录自己的服务器账户，MCP 应用须完成该中继的 OAuth 授权。</p>
   <pre><code>ssmcp yourname@{{gateway_authority}}</code></pre>
   <p>在设备上运行 <code>ssmcp list</code> 可查看本机会话，用 <code>ssmcp attach NAME</code> 接入其中正在运行的会话。远程设备列表由控制者在授权的 MCP 应用中调用 <code>list</code> 查看。</p>
-  <p>下次直接运行 <code>ssmcp</code> 即可复用最近一次成功连接。结束客户端进程即可关闭设备连接。</p>
+  <p>每次连接都需要运行 <code>ssmcp yourname@{{gateway_authority}}</code>。结束客户端进程即可关闭设备连接。</p>
   <details><summary>账户、设备和协作成员有什么区别？</summary><p>服务器账户决定谁能连接设备；客户端代表一台正在连接的电脑。会话内的协作成员由 <code>collab.join</code> 登记，用于消息与任务协作，不会替代设备授权。</p><p>主窗口中的 <code>/invite</code> 生成会话内工作组协作说明。设备访问仍由该连接的允许名单和现有权限检查决定。允许名单不接受裸用户名、<code>@github</code> 或其他服务器的账户。流量按实际控制账户计费，一个账户的额度或权限变化不会断开其他获准控制者。</p></details>
 </section>
 <section id="basics" aria-labelledby="basics-title">

@@ -688,6 +688,7 @@ fn worker_activity_frame_rejects_duplicate_and_malformed_members() {
     let member = crate::wire::WorkerMemberActivity {
         agent_id: format!("agent_{}", "a".repeat(32)),
         tool_calls_10m: 4,
+        calls_per_minute: None,
         offline: false,
     };
     assert!(apply_worker_activity(vec![member.clone(), member.clone()]).is_err());

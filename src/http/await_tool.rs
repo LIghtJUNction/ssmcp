@@ -1890,7 +1890,7 @@ async fn finish_passive_response(
         super::prompt_hooks::append(report, tool_result(Ok(value.clone())), &eligible).await;
     let mut response =
         super::events_tool::worker_subscriptions::append(report, response, &eligible).await;
-    if let Some(notices) = response.get("worker_events") {
+    if let Some(notices) = response["structuredContent"].get("worker_events") {
         value["worker_events"] = notices.clone();
     }
     // The bounded summary, timer and worker probes can await; withhold observation data as well as

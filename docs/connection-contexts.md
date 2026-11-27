@@ -1,6 +1,6 @@
 # 选择本地或远程连接
 
-连接 context 给一个目标起名字，例如 `here` 表示本机，`work` 表示一个 HTTPS 中继。随后用同一个 `--context` 参数选择目标，或为新连接保存默认选择。名字只负责找到端点；中继按设备指定的账号名单验证控制者。[选择实现](../src/client/connection_context.rs) · [账号与授权](client-accounts.md)
+连接 context 给一个目标起名字，例如 `here` 表示本机，`work` 表示一个 HTTPS 中继。管理命令可通过 `--context` 选择目标或保存查询时默认使用的中继。名字只负责找到端点；中继按设备指定的账号名单验证控制者。[选择实现](../src/client/connection_context.rs) · [账号与授权](client-accounts.md)
 
 本文描述当前源码中的命令。运行 `ssmcp context --help` 可确认已安装版本是否支持。远程 context 使用 HTTPS；本地 context 使用现有 Linux 前台模式，其运行前提见[本地运行](local-mode.md#运行前提)。
 
@@ -21,7 +21,7 @@ ssmcp context list
 连接中继时，为这条被控连接指定允许的账号。
 
 ~~~sh
-ssmcp --context work --username alice --name dev
+ssmcp alice@relay.example.com --name dev
 ~~~
 
 本地目标可以直接启动：
@@ -37,24 +37,24 @@ ssmcp --context here --name local-dev
 `--context` 只影响本次命令。例如：
 
 ~~~sh
-ssmcp --context work --username alice
+ssmcp --context work context show
 ~~~
 
 在支持这种环境赋值语法的 Shell 中，也可以为一条命令指定：
 
 ~~~sh
-SSMCP_CONTEXT=work ssmcp --username alice
+SSMCP_CONTEXT=work ssmcp context show
 ~~~
 
-要保存新连接的默认目标：
+要保存管理命令的默认目标：
 
 ~~~sh
 ssmcp context use work
 ssmcp context show
-ssmcp --name dev --username alice
+ssmcp alice@relay.example.com --name dev
 ~~~
 
-SSMCP 按下列规则选择新连接的目标。
+设备连接显式使用 `用户名@服务器`。账号查询和 context 管理命令使用以下选择规则。
 
 | 输入 | 实际规则 |
 | --- | --- |
@@ -133,7 +133,7 @@ endpoint = "https://relay.example.com"
 
 切换中继后，请指定在该中继已登记的用户名。远程操作者通过 MCP 应用授权新中继。服务器公钥固定使用独立的[信任配置](client-server.md#信任公钥写到哪里)。
 
-本地 context 沿用 Linux 前台运行方式，不增加后台会话管理。选择在创建连接时解析一次。保存的 session 记录解析后的具体目标；恢复旧 session、连接重试、正在执行的任务和已有问答队列继续使用原目标。`context use` 只改变以后创建的连接。连接 context 也不改变 `--context-root` 的文件访问范围，或 `/context`、`/switch` 管理的对话上下文。
+本地 context 沿用 Linux 前台运行方式，不增加后台会话管理。选择在创建连接时解析一次。保存的 session 记录解析后的具体目标；恢复旧 session、连接重试、正在执行的任务和已有问答队列继续使用原目标。`context use` 改变以后管理命令的默认目标。连接 context 也不改变 `--context-root` 的文件访问范围，或 `/context`、`/switch` 管理的对话上下文。
 
 ## 排查选择问题
 

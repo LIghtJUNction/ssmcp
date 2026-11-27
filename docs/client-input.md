@@ -326,6 +326,8 @@ return await exec.run(clientId, {
 
 ## 11. 显式交接与结构化展示
 
-`/handoff [NOTE]` 显式导出当前保留的会话、待发要求与未回答问题，生成可编辑的私有 Markdown 引用。导出后仍由用户选择收件人并提交；文件不会随着后续事件自动更新。旧的记忆检查点和分支恢复入口已经退役。[显式交接](conversation-history.md) · [上下文记忆迁移说明](context-memory.md)
+`/handoff [NOTE]` 请求当前 Agent 生成交接提示词，完成后自动复制到本机剪贴板。
+
+`/handoff-export [NOTE]` 显式导出当前保留的会话、待发要求与未回答问题，生成可编辑的私有 Markdown 引用。导出后仍由用户选择收件人并提交；文件不会随着后续事件自动更新。旧的记忆检查点和分支恢复入口已经退役。[显式交接](conversation-history.md) · [上下文记忆迁移说明](context-memory.md)
 
 需要卡片、表格、指标或步骤时，Agent 可用通用 `call(clientId, "ssmcp.ui.present", arguments)` 调用已注册的本地展示工具。它与 `ui.message` 共用消息身份、幂等回执和实时记录，不把展示内容加入用户要求队列。字段和支持的块类型见 [结构化展示](intelligence-ui.md)。

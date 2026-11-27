@@ -25,6 +25,8 @@ struct WorkerSummary: Identifiable {
     @Published var origin = ""
     @Published var token = ""
     @Published var readOnly = true
+    @Published private(set) var ownedSession: String?
+    var hasGateway: Bool { gateway != nil }
     @Published private(set) var status = "未连接"
     /// Only mutations occupy this lane; a close or explicit command can cancel reads immediately.
     @Published private(set) var busy = false
@@ -35,6 +37,9 @@ struct WorkerSummary: Identifiable {
     @Published private(set) var terminals: [TerminalSummary] = []
     @Published private(set) var workerRows: [WorkerSummary] = []
     @Published private(set) var workerSummary = ""
+    @Published private(set) var timeSnapshot: JSONObject?
+    @Published private(set) var updateResult: String?
+    @Published private(set) var workerProductivity: [String] = []
     @Published private(set) var nextWorkerOffset: Int?
     @Published private(set) var poolGeneration: String?
     @Published private(set) var terminalOutput: [String: String] = [:]
@@ -84,7 +89,13 @@ struct WorkerSummary: Identifiable {
         self.gateway = gateway; self.connection = initialConnection; self.inbox = initialInbox
         self.makeBudget = makeBudget
         guard loadPairing else { return }
-        do { if let saved = try PairingStore.load() { origin = saved.0; token = saved.1 } }
+        do {
+            if let saved = try PairingStore.load() {
+                let api = try Gateway(origin: saved.0, token: saved.1)
+                self.gateway = api; origin = api.origin; token = saved.1
+                ownedSession = try CommandJournal.lastOwnedSession(scope: PairingStore.receiptScope(origin: api.origin, token: saved.1))
+            }
+        }
         catch { status = "配对信息不可用，请删除后重新配对。" }
     }
     func setActive(_ value: Bool) {
@@ -116,20 +127,21 @@ struct WorkerSummary: Identifiable {
         }
         return error
     }
-    func configureAndList() async {
+    func configure() {
         guard !busy, connection == nil else { return }
         do {
             let api = try Gateway(origin: origin, token: token)
+            let previous = try CommandJournal.lastOwnedSession(scope: PairingStore.receiptScope(origin: api.origin, token: token))
             try PairingStore.save(origin: api.origin, token: token)
             stopReads(); gateway = api; origin = api.origin; epoch += 1
-            await listSessions()
+            ownedSession = previous; sessions = []; nextSessionOffset = nil; status = "已保存网关配对"
         } catch { fail(error, "配对失败") }
     }
     func deletePairing() {
         guard !busy, connection == nil else { return }
         do {
             try PairingStore.delete(); stopReads(); gateway = nil; origin = ""; token = ""
-            sessions = []; nextSessionOffset = nil; status = "已删除配对信息；未确定的请求记录仍保留。"; epoch += 1
+            ownedSession = nil; sessions = []; nextSessionOffset = nil; status = "已删除配对信息；未确定的请求记录仍保留。"; epoch += 1
         } catch { fail(error, "删除失败") }
     }
     func listSessions(more: Bool = false) async {
@@ -147,7 +159,38 @@ struct WorkerSummary: Identifiable {
             nextSessionOffset = page.1; status = "选择会话"
         } catch { if mark == epoch, readBudget === budget, !budget.isCancelled { fail(error, "读取失败") } }
     }
-    func open(_ session: String) async {
+    func createSession(destination input: String, terms: Bool, privacy: Bool) async {
+        guard let api = gateway, !busy, connection == nil else { return }
+        let destination = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = destination.split(separator: "@", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts.allSatisfy({ !$0.isEmpty }), destination.utf8.count <= 512,
+              !destination.contains(where: { $0.isWhitespace }) else {
+            status = "请输入用户名@中继地址"; return
+        }
+        stopReads(); busy = true; epoch += 1
+        let requestID = UUID().uuidString
+        var reserved = false, received = false
+        do {
+            let scope = PairingStore.receiptScope(origin: api.origin, token: token)
+            if let pending = try CommandJournal.pendingCreation(scope: scope, destination: destination) {
+                busy = false; status = "已有待核对的创建请求 " + pending; return
+            }
+            try CommandJournal.reserve(session: destination, id: requestID, operation: "session.create",
+                                       target: destination, gateway: scope)
+            reserved = true; status = "正在网关上新建会话"
+            let target = try await api.createSession(destination: destination, terms: terms, privacy: privacy, requestID: requestID)
+            received = true
+            try CommandJournal.settle(requestID, state: .confirmed, session: target)
+            ownedSession = target; note("已新建会话 " + target + " · " + requestID)
+            busy = false
+            await open(target, readOnly: false)
+        } catch {
+            let failure = mutationFailure(error, received: received, attempted: reserved)
+            if reserved, let known = failure as? BridgeFailure, !known.unknown { try? CommandJournal.settle(requestID, state: .rejected) }
+            busy = false; fail(failure, "新建会话 " + requestID)
+        }
+    }
+    func open(_ session: String, readOnly requestedMode: Bool? = nil) async {
         guard let api = gateway, !busy, connection == nil else { return }
         stopReads(); busy = true; epoch += 1
         let requestID = UUID().uuidString
@@ -155,7 +198,7 @@ struct WorkerSummary: Identifiable {
         var reserved = false, received = false
         do {
             try CommandJournal.reserve(session: session, id: requestID, operation: "connection.open"); reserved = true
-            let opened = try await api.open(session: session, readOnly: readOnly, openRequestID: requestID)
+            let opened = try await api.open(session: session, readOnly: requestedMode ?? readOnly, openRequestID: requestID)
             received = true
             try CommandJournal.settle(requestID, state: .confirmed)
             connection = opened; inbox = nil; pendingHistory = nil; chatCursor = nil
@@ -216,6 +259,7 @@ struct WorkerSummary: Identifiable {
             }
             let terminalState = try await read("terminals", api: api, connection: current, budget: budget)
             let workerState = try await read("workers", api: api, connection: current, budget: budget, query: ["offset": workerOffset, "limit": 16])
+            let time = try await read("time", api: api, connection: current, budget: budget)
             let roster = try await read("threads", api: api, connection: current, budget: budget)
             let queued = try await read("chat.queue", api: api, connection: current, budget: budget)
             let snapshot = try prepare(terminalState, workers: workerState, roster: roster, queued: queued, history: history?.value)
@@ -226,6 +270,9 @@ struct WorkerSummary: Identifiable {
                 note("后端代次已变更；旧命令仍属于原代次，没有重放。")
             }
             connection = current
+            timeSnapshot = time
+            let productivity = workerState?["productivity"] as? JSONObject
+            workerProductivity = Array((productivity?["plot"] as? [String] ?? []).prefix(5))
             terminals = snapshot.terminals; workerRows = snapshot.workers; workerSummary = snapshot.workerSummary
             nextWorkerOffset = snapshot.nextWorker; poolGeneration = snapshot.poolGeneration
             threads = snapshot.threads; chatCanSend = snapshot.canSend; queue = snapshot.queue
@@ -254,14 +301,16 @@ struct WorkerSummary: Identifiable {
         if let workers {
             pool = try string(workers["pool_generation"])
             if let value = workers["next_offset"], !(value is NSNull) { nextWorker = try integer(value, 0...Int.max) }
-            summary = "\(workers["working"] ?? 0) 工作 · \(workers["idle"] ?? 0) 待命 · \(workers["offline"] ?? 0) 离线\n\(workers["registered_workers"] ?? 0) 已登记 · 目标 \(workers["desired_total"] ?? 0) · \(workers["retiring"] ?? 0) 退出中"
+            summary = "Dreaming \(workers["dreaming"] ?? "—") · \(workers["working"] ?? 0) 工作 · \(workers["idle"] ?? 0) 待命 · \(workers["offline"] ?? 0) 离线\n\(workers["registered_workers"] ?? 0) 已登记 · 目标 \(workers["desired_total"] ?? 0) · \(workers["retiring"] ?? 0) 退出中"
             workerRows = try ((workers["slots"] as? [JSONObject]) ?? []).prefix(32).map { row in
                 let epoch = try Counter(row["epoch"]), id = "\(row["slot"] ?? "")"
                 let details = ["task_summary", "progress", "last_command", "reason"].compactMap { key -> String? in
                     guard let value = row[key], !(value is NSNull) else { return nil }
                     return String(String(describing: value).prefix(1024))
                 }.joined(separator: "\n")
-                return WorkerSummary(id: id, title: "站位 \(id) · \(row["state"] ?? "") · epoch \(epoch)", details: details)
+                let state = row["display_state"] as? String ?? row["state"] as? String ?? ""
+                let label = state == "dreaming" ? "☾ Dreaming" : state
+                return WorkerSummary(id: id, title: "站位 \(id) · \(label) · epoch \(epoch)", details: details)
             }
         }
         let threadRows = try ((roster?["agents"] as? [JSONObject]) ?? []).prefix(32).map {
@@ -303,6 +352,7 @@ struct WorkerSummary: Identifiable {
         do { request = try BridgeProtocol.request("command", generation: expectedGeneration, target: name, arguments: arguments) }
         catch { fail(error, "无效命令"); return completion(.notSent) }
         stopReads(); busy = true
+        if name == "client.update" { updateResult = nil }
         var reserved = false, dispatched = false, received = false
         var state: CommandState = .notSent
         do {
@@ -317,6 +367,10 @@ struct WorkerSummary: Identifiable {
             try CommandJournal.settle(request.id, state: state)
             status = state == .unknown ? "\(name) · unknown · 正文仍保留" : "\(name) · 已验证回执"
             note("\(current.session) · \(name) · \(request.id)\n\(status)\n回执：\(receipt["value"] ?? "")")
+            if name == "client.update", let payload = receipt["value"] as? JSONObject {
+                updateResult = [payload["summary"] as? String, payload["details"] as? String]
+                    .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
+            }
         } catch {
             let failure = mutationFailure(error, received: received, attempted: dispatched)
             state = !dispatched ? .notSent : ((failure as? BridgeFailure)?.unknown == false ? .rejected : .unknown)
@@ -394,7 +448,7 @@ struct WorkerSummary: Identifiable {
             try await api.close(current.id); received = true
             try CommandJournal.settle(requestID, state: .confirmed)
             epoch += 1; connection = nil; inbox = nil; pendingHistory = nil
-            terminals = []; terminalOutput = [:]; terminalBytes = [:]; workerRows = []
+            terminals = []; terminalOutput = [:]; terminalBytes = [:]; workerRows = []; timeSnapshot = nil; workerProductivity = []; updateResult = nil
             threads = []; conversation = []; queue = []; chatCursor = nil; chatCanSend = false
             status = "已断开 · 后台会话继续运行"
         } catch {

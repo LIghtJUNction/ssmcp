@@ -1157,16 +1157,15 @@ fn notice_budget_delivers_a_precise_prefix_or_explicit_read_fallback() {
             "data":{"body":"x".repeat(2500)}
         })).collect::<Vec<_>>()
     });
+    let prefix_budget = 8 * 1024;
     let (response_with_events, prefix) =
-        fit_notice(&response, &[], notice.clone(), MAX_NOTICE_BYTES).unwrap();
+        fit_notice(&response, &[], notice.clone(), prefix_budget).unwrap();
     let events = prefix["events"].as_array().unwrap();
     assert!(!events.is_empty() && events.len() < 4);
     assert_eq!(prefix["next_cursor"], events.last().unwrap()["seq"]);
     assert_eq!(prefix["cursor"], 0);
     assert_eq!(prefix["has_more"], true);
-    assert!(
-        response_with_events.to_string().len() - response.to_string().len() <= MAX_NOTICE_BYTES
-    );
+    assert!(response_with_events.to_string().len() - response.to_string().len() <= prefix_budget);
     let (small_response, fallback) = fit_notice(&response, &[], notice, 1400).unwrap();
     assert_eq!(fallback["status"], "read_required");
     assert_eq!(fallback["read_limit"], 1);
@@ -1264,10 +1263,10 @@ fn text_summary_keeps_authoritative_machine_receipts_and_user_content() {
         "has_more":false,"events":[{"seq":11,"kind":"worker.completed","data":{"task_id":"original",
         "task_status":"failed","details":"fixture event detail covered by structured access"}}]});
     let result = append_values(&original, std::slice::from_ref(&notice), MAX_NOTICE_BYTES).unwrap();
-    assert_eq!(result["worker_events"], json!([notice]));
+    assert!(result.get("worker_events").is_none());
     assert_eq!(
         result["structuredContent"]["worker_events"],
-        result["worker_events"]
+        json!([notice])
     );
     assert_eq!(
         result["structuredContent"]["user_messages"],

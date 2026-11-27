@@ -222,6 +222,8 @@ async fn real_runtime_worker_resize_requires_writer_and_exact_pool_without_manag
     };
     assert_eq!(state.value["offline"], 2);
     assert_eq!(state.value["idle"], 0);
+    assert_eq!(state.value["dreaming"], 0);
+    assert_eq!(state.value["slots"][0]["display_state"], "offline");
     assert_eq!(state.value["registered_workers"], 0);
     assert!(state.value["manager"].is_null());
     let pool_generation = state.value["pool_generation"].as_str().unwrap();
@@ -532,5 +534,91 @@ async fn unified_pty_bridge_keeps_writer_lease_generation_and_native_hooks() {
             .unwrap()["stdin"]["bytes_written"],
         1
     );
+    runtime.shutdown().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn session_directory_through_bridge_changes_exec_and_keeps_workspace_boundary() {
+    let root = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let runtime = Runtime::new(
+        crate::backend::Backend::start(std::path::Path::new("/bin/sh"))
+            .await
+            .unwrap(),
+        root.clone(),
+    )
+    .unwrap();
+    runtime
+        .local_shell()
+        .bind_workbench(Arc::new(
+            crate::session::workbench::Workbench::new(root.clone(), Some("demo@relay.test".into()))
+                .unwrap(),
+        ))
+        .unwrap();
+    let (_, handle) = host();
+    let _binding = handle.bind_runtime(runtime.clone()).unwrap();
+    let reader = handle.frontend(true).unwrap();
+    let writer = handle.frontend(false).unwrap();
+    let generation = generation(&writer).await;
+    let command = |name: &str, arguments: Value| {
+        req(Operation::Command {
+            command: id(name),
+            generation: generation.clone(),
+            arguments,
+        })
+    };
+    assert_eq!(
+        error(reader.request(command("session.new", json!({}))).await).code,
+        ErrorCode::Denied
+    );
+    let cd = command("session.cd", json!({"path":"src"}));
+    assert_eq!(
+        error(reader.request(cd.clone()).await).code,
+        ErrorCode::Denied
+    );
+    let response = writer.request(cd).await;
+    let ResponseBody::Command(receipt) = response.body else {
+        panic!("{response:?}")
+    };
+    assert_eq!(receipt.value["cwd"], json!(root.join("src")));
+    let response = writer
+        .request(command("session.cd", json!({"path":"../.."})))
+        .await;
+    assert_eq!(error(response).code, ErrorCode::InvalidRequest);
+    let status = runtime
+        .local_shell()
+        .call(
+            "ssmcp.exec.start",
+            json!({"command":["pwd"],"mode":"pipes"}),
+        )
+        .await
+        .unwrap();
+    let id = status["job_id"].as_str().unwrap();
+    runtime
+        .local_shell()
+        .call("ssmcp.exec.wait", json!({"job_id":id,"wait_ms":5000}))
+        .await
+        .unwrap();
+    let page = runtime
+        .local_shell()
+        .call("ssmcp.exec.read", json!({"job_id":id,"wait_ms":5000}))
+        .await
+        .unwrap();
+    assert_eq!(page["exit_code"], 0);
+    assert_eq!(
+        page["stdout"].as_str().unwrap().trim_end(),
+        root.join("src").to_str().unwrap()
+    );
+    let result = writer
+        .request(req(Operation::State {
+            generation,
+            resource: self::id("runtime"),
+            query: json!({}),
+        }))
+        .await;
+    let ResponseBody::State(state) = result.body else {
+        panic!("missing runtime state")
+    };
+    assert_eq!(state.value["cwd"], json!(root.join("src")));
     runtime.shutdown().await;
 }

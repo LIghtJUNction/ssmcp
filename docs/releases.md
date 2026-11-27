@@ -123,10 +123,10 @@ $installRoot = Join-Path $env:LOCALAPPDATA "ssmcp\$version"
 Expand-Archive -LiteralPath $download -DestinationPath $installRoot -Force
 $client = Join-Path $installRoot 'ssmcp.exe'
 & $client --version
-& $client --server https://relay.example --name windows-dev --title '维护当前项目' --allow alice@relay.example
+& $client alice@relay.example --name windows-dev --title '维护当前项目'
 ```
 
-把最后一行的服务器和已注册账号替换为实际值，并先进入要共享的项目目录。程序按版本保存在 `%LOCALAPPDATA%\ssmcp`，可以把包含 `ssmcp.exe` 的目录加入用户 `Path` 后使用短命令。设备可不登录，但控制者必须完成该服务器的账号登录。[连接配置](configuration.md) · [PowerShell 解压文档](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.archive/expand-archive)
+把最后一行的服务器和账号替换为实际值，并先进入要共享的项目目录。首次启动时按提示在浏览器中核对短码并登录。程序按版本保存在 `%LOCALAPPDATA%\ssmcp`，可以将含 `ssmcp.exe` 的目录加入用户 `Path`。[连接配置](configuration.md) · [PowerShell 解压文档](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.archive/expand-archive)
 
 从 PowerShell 启动客户端不意味着内部 shell 一定是 PowerShell：默认使用 `COMSPEC` 对应的 shell，通常为 `cmd.exe`。需要其他 shell 时，用 `--shell` 指定其绝对路径。切换安装版本时停止旧客户端，再启动新版本目录中的程序；`reload` 会重启原入口，本身不切换目录或安装更新。
 
@@ -149,7 +149,7 @@ install -m 0755 "$ssmcp_unpack_dir/ssmcp" "$HOME/.local/bin/ssmcp"
 rm -rf "$ssmcp_unpack_dir"
 ```
 
-核验步骤按操作系统选择一条。确认 `~/.local/bin` 已在 `PATH` 中后，在项目目录运行 `ssmcp --server https://relay.example --name dev --title "维护当前项目" --allow alice@relay.example`，替换为实际服务器和已注册账号。安装网关还需要配置 HTTPS、OAuth、账号存储与系统隔离依赖，不能只把 `ssmcpd` 复制到服务器就视为部署完成。
+核验步骤按操作系统选择一条。确认 `~/.local/bin` 已在 `PATH` 中后，在项目目录运行 `ssmcp alice@relay.example --name dev --title "维护当前项目"`，替换为实际服务器和已注册账号。安装网关还需要配置 HTTPS、OAuth、账号存储与系统隔离依赖，不能只把 `ssmcpd` 复制到服务器就视为部署完成。
 
 ## 维护者：固定源码后正式发布
 

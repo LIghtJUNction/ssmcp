@@ -29,25 +29,25 @@ fn startup_update_frame_is_readable_at_120_and_48_columns_without_changing_draft
         state.conversation.target = Some("chosen-agent".into());
         state.events.latest();
         state.update_notice = Some(super::super::update_notice::Notice::Release(
-            "ssmcp update --check · v1.2.4 available".into(),
+            "/update --check · v1.2.4 available".into(),
         ));
         let canvas = state.conversation.canvas.snapshot();
         let shown = screen(&mut state);
-        assert!(shown.contains("ssmcp update --check"), "{width}: {shown}");
+        assert!(shown.contains("/update --check"), "{width}: {shown}");
         assert!(shown.contains("v1.2.4"), "{width}: {shown}");
         assert!(state.conversation.composer.is_empty());
         assert_eq!(state.conversation.target.as_deref(), Some("chosen-agent"));
         assert_eq!(state.conversation.canvas.snapshot(), canvas);
         state.conversation.composer.set_text("unsent\nrequest");
         let cursor = state.conversation.composer.cursor();
-        assert!(!screen(&mut state).contains("ssmcp update --check"));
+        assert!(!screen(&mut state).contains("/update --check"));
         assert_eq!(state.conversation.composer.text(), "unsent\nrequest");
         assert_eq!(state.conversation.composer.cursor(), cursor);
         state.conversation.composer.set_text("");
         state.notice = Some("Input recovery required".into());
         let shown = screen(&mut state);
         assert!(shown.contains("Input recovery required"));
-        assert!(!shown.contains("ssmcp update --check"));
+        assert!(!shown.contains("/update --check"));
         assert!(
             state.actions.is_empty(),
             "a notice never queues an update/install action"
@@ -80,7 +80,7 @@ fn startup_update_frame_keeps_help_and_question_navigation_visible() {
         state.conversation.content_focus = true;
         let before = state.frame(Instant::now()).rows.pop().unwrap();
         state.update_notice = Some(super::super::update_notice::Notice::Release(
-            "ssmcp update --check · v1.2.4 available".into(),
+            "/update --check · v1.2.4 available".into(),
         ));
         let after = state.frame(Instant::now()).rows.pop().unwrap();
         assert_eq!(after, before, "{view:?}");
@@ -94,12 +94,12 @@ fn startup_update_frame_keeps_help_and_question_navigation_visible() {
         },
     );
     state.update_notice = Some(super::super::update_notice::Notice::Release(
-        "ssmcp update --check · v1.2.4 available".into(),
+        "/update --check · v1.2.4 available".into(),
     ));
-    assert!(screen(&mut state).contains("ssmcp update --check"));
+    assert!(screen(&mut state).contains("/update --check"));
     state.filter_editing = true;
     state.filter_draft = "error".into();
     let shown = screen(&mut state);
     assert!(shown.contains("Enter Apply"));
-    assert!(!shown.contains("ssmcp update --check"));
+    assert!(!shown.contains("/update --check"));
 }

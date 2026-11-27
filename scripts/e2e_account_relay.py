@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Real account/relay CLI integration against a local synthetic GitHub gateway.
 
-Python standard library only. No real OAuth, SSH, user credentials or models.
+Uses Python and OpenSSL on loopback with synthetic users and a private fixture CA.
 """
 from __future__ import annotations
 import argparse
@@ -17,6 +17,7 @@ import queue
 import secrets
 import signal
 import socket
+import ssl
 import stat
 import struct
 import subprocess
@@ -184,14 +185,15 @@ class WebSocket:
                     }}})
                     continue
                 if frame["type"] == "steering":
-                    # Account lifecycle tests have no user requirements. Only
-                    # v7 presence polling is valid here; never simulate queue
-                    # publication, editing, or response-boundary delivery.
                     assert self.hello["version"] == 7
-                    assert frame["command"] == {"op": "snapshot"}
+                    if self.state.steering is None:
+                        assert frame["command"] == {"op": "snapshot"}
+                        messages = []
+                    else:
+                        messages = self.state.steering(self.id, frame["command"])
                     self.send({"type": "steering_reply", "id": frame["id"], "result": {"Ok": {
-                        "schema_version": 1, "client_id": self.id, "revision": 0,
-                        "agents": [], "messages": [],
+                        "schema_version": 1, "client_id": self.id, "revision": len(messages),
+                        "agents": [], "messages": messages,
                     }}})
                     continue
                 assert frame["type"] == "reply", f"unexpected client frame type: {frame['type']}"
@@ -219,13 +221,22 @@ class State:
         self.lock = threading.RLock()
         self.account_token = "cl_" + secrets.token_hex(32)
         self.device_code = secrets.token_hex(32)
-        self.pending_polls = 1
+        self.user_code = "AB12C-DE34F"
+        self.device_tokens = set()
+        self.invites = set()
+        self.poll_seen = threading.Event()
+        self.browser_approved = threading.Event()
+        self.flow_consumed = False
+        self.verified_upgrade = True
         self.sessions = {}
         self.connections = {}
+        self.steering = None
         self.next_revoke_on_ready = False
         self.requests = []
         self.connect_attempts = {}
         self.reject_connect = None
+        self.before_refusal = None
+        self.refused_upgrades = []
         self.errors = []
         self.origin = ""
         self.logged_out = False
@@ -234,8 +245,7 @@ class State:
 
     @property
     def allow_principal(self):
-        # HTTP is permitted only for this owned loopback fixture.
-        return f"{IDENTITY['username']}@{self.origin}"
+        return f"{IDENTITY['username']}@{self.origin.removeprefix('https://')}"
 
     def identity(self, token):
         return token == self.account_token and not self.logged_out
@@ -266,11 +276,15 @@ class Handler(BaseHTTPRequestHandler):
         token = self.bearer()
         if self.path == "/api/client/connect":
             self.state.connect_attempts[token] = self.state.connect_attempts.get(token, 0) + 1
-            # A present invalid credential never becomes an anonymous session.
-            if self.headers.get("Authorization") is not None and not self.state.identity(token):
-                return self.respond(401, {"error": "invalid_token"})
-            if not token and self.state.reject_connect is not None:
-                return self.respond(self.state.reject_connect, {"error": "not_allowed"})
+            if not token or token not in self.state.device_tokens:
+                return self.respond(401, {"error": "device_verification_required"})
+            if self.state.reject_connect is not None:
+                self.state.refused_upgrades.append(self.headers.get("Upgrade", "").lower())
+                if self.state.before_refusal is not None:
+                    self.state.before_refusal()
+                # Misleading response text must never override the authenticated handshake status.
+                return self.respond(self.state.reject_connect, {"code": "traffic_quota_exceeded",
+                                                              "url": "https://untrusted.invalid"})
             offered = {part.strip() for part in self.headers.get("ssmcp-capabilities", "").split(",")}
             self.state.capability_offers.append(sorted(offered))
             if not set(CAPABILITIES).issubset(offered):
@@ -282,6 +296,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Upgrade", "websocket")
             self.send_header("Connection", "Upgrade")
             self.send_header("Sec-WebSocket-Accept", accept)
+            if self.state.verified_upgrade:
+                self.send_header("SSMCP-Device-Verified", "1")
             self.end_headers()
             self.close_connection = True
             self.connection.settimeout(20)
@@ -312,21 +328,38 @@ class Handler(BaseHTTPRequestHandler):
         assert 0 <= size <= 65536
         body = json.loads(self.rfile.read(size) or b"{}")
         if self.path == "/api/client/login/start":
+            if body.get("username") != IDENTITY["username"] or body.get("device_only") is not True:
+                return self.respond(400, {"error": "invalid_device_request"})
+            with self.state.lock:
+                self.state.flow_consumed = False
+                self.state.device_code = secrets.token_hex(32)
+                self.state.browser_approved.clear()
+                self.state.poll_seen.clear()
             return self.respond(200, {
-                "device_code": self.state.device_code, "user_code": "ABCD-EFGH",
-                "verification_uri": self.state.origin + "/device",
-                "verification_uri_complete": self.state.origin + "/device?user_code=ABCD-EFGH",
-                "expires_in": 600, "interval": 1})
+                "device_code": self.state.device_code, "user_code": self.state.user_code,
+                "verification_uri": self.state.origin + "/setup",
+                "verification_uri_complete": self.state.origin + "/setup?code=" + self.state.user_code,
+                "expires_in": 600, "interval": 2})
         if self.path == "/api/client/login/poll":
-            assert body["device_code"] == self.state.device_code
-            if self.state.logged_out:
-                # A foreground account client may offer one new authorization.
-                # The user declines it here; never mint the revoked token again.
-                return self.respond(200, {"status": "denied"})
-            if self.state.pending_polls:
-                self.state.pending_polls -= 1
-                return self.respond(200, {"status": "pending"})
-            return self.respond(200, {"status": "authorized", "access_token": self.state.account_token,
+            with self.state.lock:
+                if body.get("device_code") != self.state.device_code or self.state.flow_consumed:
+                    return self.respond(400, {"error": "invalid_device_code"})
+                if not self.state.browser_approved.is_set():
+                    self.state.poll_seen.set()
+                    return self.respond(200, {"status": "pending"})
+                self.state.flow_consumed = True
+                device_token = "cd_" + secrets.token_hex(32)
+                self.state.device_tokens.add(device_token)
+            return self.respond(200, {"status": "authorized", "device_token": device_token,
+                                      "identity": IDENTITY, "expires_in": 3600})
+        if self.path == "/api/client/enroll":
+            with self.state.lock:
+                if self.bearer() not in self.state.device_tokens or body.get("token") not in self.state.invites:
+                    return self.respond(401, {"error": "invalid_invitation"})
+                self.state.invites.remove(body["token"])
+                device_token = "cd_" + secrets.token_hex(32)
+                self.state.device_tokens.add(device_token)
+            return self.respond(200, {"device_token": device_token,
                                       "identity": IDENTITY, "expires_in": 3600})
         if not self.state.identity(self.bearer()):
             return self.respond(401, {"error": "invalid_token"})
@@ -350,21 +383,48 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(200, {"content": [], "structuredContent": value})
         self.respond(404, {"error": "not_found"})
 
+def loopback_tls(directory):
+    """A unique CA, leaf and pin for this run. All keys remain in the temporary directory."""
+    directory.mkdir(mode=0o700)
+    def openssl(*args):
+        return subprocess.run(["openssl", *args], cwd=directory, check=True,
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout
+
+    openssl("req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+            "-nodes", "-days", "2", "-subj", "/CN=SSMCP fixture CA",
+            "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign",
+            "-keyout", "ca.key", "-out", "ca.pem")
+    openssl("req", "-new", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:P-256",
+            "-nodes", "-subj", "/CN=127.0.0.1", "-keyout", "server.key", "-out", "server.csr")
+    extensions = directory / "leaf.ext"
+    extensions.write_text("basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\n"
+                          "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n")
+    openssl("x509", "-req", "-in", "server.csr", "-CA", "ca.pem", "-CAkey", "ca.key",
+            "-CAcreateserial", "-days", "2", "-extfile", str(extensions), "-out", "server.pem")
+    public_key = openssl("pkey", "-in", "server.key", "-pubout", "-outform", "DER")
+    pin = "sha256//" + base64.b64encode(hashlib.sha256(public_key).digest()).decode()
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(directory / "server.pem", directory / "server.key")
+    return context, pin, directory / "ca.pem"
+
 class Harness:
     def __init__(self, directory, binary):
         self.root, self.binary = directory, str(binary)
+        context, pin, self.fixture_ca = loopback_tls(directory / "loopback-tls")
         self.state = State()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.server.daemon_threads = True
+        self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
         self.server.state = self.state
-        self.state.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.state.origin = f"https://127.0.0.1:{self.server.server_address[1]}"
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.foreign = State()
         self.foreign_server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.foreign_server.daemon_threads = True
+        self.foreign_server.socket = context.wrap_socket(self.foreign_server.socket, server_side=True)
         self.foreign_server.state = self.foreign
-        self.foreign.origin = f"http://127.0.0.1:{self.foreign_server.server_address[1]}"
+        self.foreign.origin = f"https://127.0.0.1:{self.foreign_server.server_address[1]}"
         self.foreign_thread = threading.Thread(target=self.foreign_server.serve_forever, daemon=True)
         self.foreign_thread.start()
         self.processes, self.logs, self.checks = [], [], []
@@ -372,6 +432,13 @@ class Harness:
         for device in ("A", "B"):
             (directory / device).mkdir()
             (directory / device / "auth").mkdir(mode=0o700)
+            config = directory / device / "config" / "ssmcp"
+            config.mkdir(parents=True, mode=0o700)
+            (config / "loopback-e2e-ca.pem").write_bytes(self.fixture_ca.read_bytes())
+            (config / "trusted-servers.toml").write_text("".join(
+                f'[[servers]]\nserver = "{state.origin}"\npins = ["{pin}"]\n'
+                for state in (self.state, self.foreign)))
+
 
     def env(self, device):
         result = {key: value for key, value in os.environ.items() if not key.startswith("SSMCP_")}
@@ -379,12 +446,12 @@ class Harness:
                       XDG_CONFIG_HOME=str(self.root / device / "config"),
                       SSMCP_AUTH_HOME=str(self.root / device / "auth"),
                       SSMCP_SESSION_HOME=str(self.root / device / "sessions"),
-                      NO_COLOR="1", TERM="dumb")
+                      NO_PROXY="127.0.0.1", no_proxy="127.0.0.1", NO_COLOR="1", TERM="dumb")
         return result
 
     def redacted(self, text):
-        for value in [self.state.account_token, self.state.device_code,
-                      self.foreign.account_token, self.foreign.device_code]:
+        for value in [self.state.account_token, self.state.device_code, *self.state.device_tokens,
+                      self.foreign.account_token, self.foreign.device_code, *self.foreign.device_tokens]:
             text = text.replace(value, "[redacted]")
         return text
 
@@ -394,9 +461,20 @@ class Harness:
         self.checks.append(description)
         print("PASS " + description, flush=True)
 
-    def cli(self, device, *args, success=True):
+    def login(self, state):
+        state.poll_seen.clear()
+        process = self.spawn("B", "login", state.allow_principal, "--no-browser")
+        if not state.poll_seen.wait(10):
+            raise AssertionError("device CLI did not reach the verified TLS device authorization endpoint")
+        # Simulate the separate authenticated browser approving this particular device request.
+        state.browser_approved.set()
+        self.check(process.wait(timeout=12) == 0, "the approved device login succeeds")
+        self.check(bool(state.device_tokens), "the local issuer minted a device-only credential")
+
+    def cli(self, device, *args, success=True, input_text=None):
         result = subprocess.run([self.binary, *args], cwd=self.root / device,
-                                env=self.env(device), stdin=subprocess.DEVNULL,
+                                env=self.env(device), input=input_text,
+                                stdin=subprocess.DEVNULL if input_text is None else None,
                                 capture_output=True, text=True, timeout=20)
         if (result.returncode == 0) != success:
             raise AssertionError(self.redacted(result.stderr))
@@ -511,6 +589,7 @@ class Harness:
         denied(lookalike, "requires local approval", "the identical display login of another subject grants no access")
 
         self.foreign.resolved_subject = second["subject"]
+        self.login(self.foreign)
         foreign = self.spawn("B", self.foreign.allow_principal, "--name", "other relay", "--no-watchdog",
                              "--no-setup", "--shell", "/bin/sh")
         foreign.wait(timeout=10)
@@ -541,14 +620,12 @@ class Harness:
         retired = self.cli("A", "--ssh", "legacy.example", success=False)
         self.check("SSH device connections have been removed" in retired.stderr,
                    "legacy SSH stops before any transport starts")
-        for command in ("invite", "join"):
-            old = self.cli("A", command, "--help", success=False)
-            self.check("invite and join were removed" in old.stderr,
-                       f"retired {command} cannot enter a nonexistent invitation flow")
-        self.check(not self.state.requests, "retired commands never contact the relay")
-        for command in (("login",), ("--allow", self.state.allow_principal)):
-            self.cli("B", *command, success=False)
-        self.check(not self.state.requests, "retired login and device allow flags never contact the relay")
+        self.cli("B", self.state.allow_principal, "--allow", self.state.allow_principal, success=False)
+        self.check(not self.state.requests, "the removed startup allow flag fails before any relay request")
+        missing = self.unsigned("unauthorized launch")
+        missing.wait(timeout=8)
+        self.check(missing.returncode != 0 and not self.state.connections,
+                   "a noninteractive device without an OAuth credential cannot publish a session")
         whoami = self.cli("B", "whoami", self.state.allow_principal, "--json")
         self.check(json.loads(whoami.stdout)["account"]["username"] == IDENTITY["username"],
                    "the named public account can be read without logging in")
@@ -568,11 +645,30 @@ class Harness:
         self.check(not self.foreign.requests and credential_file.read_bytes() == original_credential,
                    "selecting another origin never borrows the saved controller credential")
 
+        self.login(self.state)
+        auth_b = self.root / "B/auth"
+        scope = self.state.origin + "\n" + IDENTITY["username"]
+        managed = auth_b / ("managed-" + hashlib.sha256(scope.encode()).hexdigest() + ".json")
+        self.check(managed.is_file() and stat.S_IMODE(managed.stat().st_mode) == 0o600,
+                   "OAuth enrollment is scoped to the origin and username and stored privately")
+        invitation = "ci_" + secrets.token_hex(32)
+        self.state.invites.add(invitation)
+        self.cli("B", "join", self.state.allow_principal, "--token-stdin", "--no-browser",
+                 input_text=invitation + "\n")
+        self.cli("B", "join", self.state.allow_principal, "--token-stdin", "--no-browser",
+                 input_text=invitation + "\n", success=False)
+        self.check(not self.state.invites, "the device invitation is consumed once after OAuth")
+        self.state.verified_upgrade = False
+        old = self.unsigned("no handshake proof", "--no-watchdog")
+        old.wait(timeout=8)
+        self.check(old.returncode != 0 and not self.state.connections,
+                   "a WebSocket upgrade without device verification never receives Hello")
+        self.state.verified_upgrade = True
         b = self.unsigned("B fixture")
         connection = self.connection("B fixture")
-        self.check(not connection.token
+        self.check(connection.token in self.state.device_tokens
                    and connection.hello["version"] in SUPPORTED_WIRE_VERSIONS,
-                   "unsigned B uses its named relay target and a supported WebSocket protocol")
+                   "B registered with its verified device token and a supported WebSocket protocol")
         listing = json.loads(self.cli("A", "list", "--json").stdout)
         self.check(listing == [] and not any(path == "/api/client/sessions" for _, path in self.state.requests),
                    "A lists its own empty local session registry while B is online")
@@ -587,37 +683,37 @@ class Harness:
         output = connection.call("ssmcp.exec.read", {"job_id": job["job_id"], "max_bytes": 4096})
         self.check(output["exit_code"] == 0 and output["stdout"] == "relay-shell-ok",
                    "real shell round-trip succeeds without relay credentials reaching native tools")
-        before = self.state.connect_attempts[""]
+        before = sum(self.state.connect_attempts.values())
         connection.close(1001)
         wait_for(lambda: len(self.state.connections.get("B fixture", [])) >= 2,
                  "default watchdog reconnects after ordinary network close")
         reconnected = self.state.connections["B fixture"][-1]
-        self.check(not reconnected.token and reconnected.id != connection.id
-                   and self.state.connect_attempts[""] == before + 1,
-                   "watchdog reconnects the unsigned device without acquiring a credential")
+        self.check(reconnected.token == connection.token and reconnected.id != connection.id
+                   and sum(self.state.connect_attempts.values()) == before + 1,
+                   "watchdog reconnects with the existing device authorization")
         reconnected.call("terminal.status", {})
         owned = descendants(b.pid)
-        before = self.state.connect_attempts[""]
+        before = sum(self.state.connect_attempts.values())
         reconnected.close(4001)
         b.wait(timeout=8)
         self.check(b.returncode != 0, "server access revocation terminates B with an error")
         wait_for(lambda: all(not process_running(pid) for pid in owned), "revocation process cleanup")
-        self.check(self.state.connect_attempts[""] == before,
+        self.check(sum(self.state.connect_attempts.values()) == before,
                    "revoked active sessions stop watchdog retries")
 
         self.state.next_revoke_on_ready = True
-        before = self.state.connect_attempts[""]
+        before = sum(self.state.connect_attempts.values())
         early = self.unsigned("B early revocation")
         early.wait(timeout=8)
-        self.check(early.returncode != 0 and self.state.connect_attempts[""] == before + 1,
+        self.check(early.returncode != 0 and sum(self.state.connect_attempts.values()) == before + 1,
                    "revocation immediately after Ready also stops startup retries")
         for status in (401, 403):
             self.state.reject_connect = status
-            before = self.state.connect_attempts[""]
+            before = sum(self.state.connect_attempts.values())
             rejected = self.unsigned(f"B HTTP {status}")
             rejected.wait(timeout=8)
             self.state.reject_connect = None
-            self.check(rejected.returncode != 0 and self.state.connect_attempts[""] == before + 1,
+            self.check(rejected.returncode != 0 and sum(self.state.connect_attempts.values()) == before + 1,
                        f"HTTP {status} policy failures stop default watchdog retries")
         stopped = self.unsigned("B interrupt")
         self.connection("B interrupt")
@@ -628,7 +724,7 @@ class Harness:
                    and not (auth_b / credential_file.name).exists()
                    and json.loads(saved.read_text()) == {
                         "mode": "relay", "server": self.state.origin, "username": IDENTITY["username"]},
-                   "the device saves the target privately without a login credential")
+                   "the device saves the target privately and never stores a controller credential")
         records = json.loads(self.cli("B", "controllers", "--json").stdout)
         self.check(len(records) == 1 and records[0]["relay"] == self.state.origin
                    and records[0]["subject"] == IDENTITY["subject"] and records[0]["status"] == "default"
@@ -638,24 +734,26 @@ class Harness:
         visits = [e for e in journal if e["kind"] == "control_allowed"]
         self.check([e["connection_id"] for e in visits] == [connection.id, reconnected.id],
                    "multiple verified native calls record one control visit per real connection")
-        bare = self.spawn("B", "--name", "B resumed", "--no-watchdog", "--no-setup", "--shell", "/bin/sh")
+        before = sum(self.state.connect_attempts.values())
+        bare = self.cli("B", success=False)
+        self.check("username@server" in bare.stderr and sum(self.state.connect_attempts.values()) == before,
+                   "a remembered target cannot open a relay connection from a bare invocation")
+        explicit = self.unsigned("B resumed")
         resumed = self.connection("B resumed")
-        self.check(not resumed.token and resumed.hello["metadata"]["allow"] == [self.state.allow_principal],
-                   "a new client invocation without a target reconnects without a token")
+        self.check(resumed.token in self.state.device_tokens and resumed.hello["metadata"]["allow"] == [self.state.allow_principal],
+                   "an explicit target reconnects with a device credential")
         resumed.call("terminal.status", {})
         self.controller_consent(resumed)
-        self.stop(bare)
-        self.check(not any(path in ("/api/client/invites", "/api/client/enroll",
-                                    "/api/client/login/start", "/api/client/login/poll")
-                           for _, path in self.state.requests),
-                   "device startup never requests login, invitation or enrollment")
+        self.stop(explicit)
+        self.check(not any(path == "/api/client/invites" for _, path in self.state.requests),
+                   "a device cannot obtain its own invitation through startup")
         self.cli("A", "logout", "--json", success=False)
         self.check(credential_file.read_bytes() == original_credential and not self.state.logged_out,
                    "the device CLI leaves legacy controller credentials untouched")
         self.check(not self.state.errors and not self.foreign.errors,
                    "gateways observed no malformed client protocol frames")
-        return {"status": "passed", "checks": len(self.checks), "passed_checks": self.checks, "transport": "loopback WebSocket",
-                "oauth": "fixture controller credential", "device": "unsigned named target",
+        return {"status": "passed", "checks": len(self.checks), "passed_checks": self.checks, "transport": "verified loopback WSS",
+                "oauth": "synthetic device authorization with explicit approval", "device": "OAuth-enrolled named target",
                 "ssh": False, "models_started": False,
                 "binary_sha256": hashlib.file_digest(Path(self.binary).open("rb"), "sha256").hexdigest(),
                 "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}

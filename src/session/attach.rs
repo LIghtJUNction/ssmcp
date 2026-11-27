@@ -2,7 +2,12 @@
 //! releases an input lease; it never changes the session's desired state.
 pub(crate) mod input;
 pub(crate) mod thread_history;
+mod workbench;
 mod zbridge_adapter;
+pub(crate) use workbench::{
+    ChatSubmission, chat_bound, open_pending_session, submit_chat, submit_session_command,
+    terminal_write,
+};
 pub use zbridge_adapter::{EventObserver, Frontend, MAX_OBSERVATION_MS, RemoteFrontend};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -511,11 +516,24 @@ enum Request {
 async fn handle_request(capture: &Capture, request: Value) -> Result<Value> {
     let request: Request =
         serde_json::from_value(request).map_err(|_| "invalid attach operation")?;
+    if crate::client::web_chat::identity().is_some()
+        && !matches!(
+            &request,
+            Request::Bridge { .. } | Request::Open { .. } | Request::Detach { .. }
+        )
+    {
+        return Err("raw device attach operations are unavailable in a chat session".into());
+    }
     match request {
         Request::Open { read_only } => {
             let (runtime, backend_generation, live_cursor) = capture.snapshot();
-            let active = runtime.is_some();
-            let chat_enabled = runtime.as_ref().map(|runtime| runtime.chat_enabled());
+            let chat = crate::client::web_chat::identity().is_some();
+            let active = chat || runtime.is_some();
+            let chat_enabled = if chat {
+                Some(true)
+            } else {
+                runtime.as_ref().map(|runtime| runtime.chat_enabled())
+            };
             let terminals = if let Some(runtime) = runtime {
                 runtime.terminals().call("terminal.list", json!({})).await?["terminals"].clone()
             } else {
@@ -1040,6 +1058,7 @@ async fn attached(
     render::configure(ui.clone());
     // Use the attached session's workspace, which may differ from the directory
     // where this frontend was launched. This grants input import only.
+    let _workbench = workbench::Binding::open(&directory, lease, read_only);
     let display_enabled = target.dashboard.unwrap_or(open["chat_enabled"] == true);
     let _local_input = display_enabled
         .then(|| crate::client::attachments::LocalInput::bind(target.cwd.clone()))
@@ -1201,6 +1220,7 @@ async fn attached(
                     }
                 }
                 _ = tick.tick() => {
+                    open_pending_session().await;
                     if terminal::exit_requested() { break; }
                     apply_keys(&directory,lease,&mut selected,&terminal_ids,keys.feed("",Instant::now(),true),read_only,backend_generation).await?;
                     let queued = terminal::take_keyboard();
@@ -1410,7 +1430,14 @@ async fn send_input(
         while !remaining.is_char_boundary(end) {
             end -= 1;
         }
-        ipc::request(directory,ENDPOINT,json!({"op":"write","lease":lease,"backend_generation":backend_generation,"terminal_id":terminal_id,"data":&remaining[..end]})).await?;
+        workbench::write_attached(
+            directory,
+            lease,
+            backend_generation,
+            terminal_id,
+            &remaining[..end],
+        )
+        .await?;
         remaining = &remaining[end..];
     }
     Ok(())

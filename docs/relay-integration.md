@@ -30,19 +30,31 @@ bob = "<Bob 的控制凭据的 64 位小写 SHA-256>"
 
 对外用 HTTPS 反代。将 `/api/client/connect` 仅开放给受运维方信任的设备，例如通过客户端证书或专用 VPN 验证设备身份。代理验证通过后设置固定的 `X-SSMCP-Device-Ingress` 请求头，其值为设备代理凭据原文，同时转发 WebSocket Upgrade。代理必须覆盖客户端送入的同名请求头。保护这一凭据并保持后端监听在 loopback。
 
-受信设备可以声明允许它们的控制身份。将互不信任的设备群放到各自的中继实例和代理信任域。网站控制凭据只用于 MCP，设备代理凭据只用于建立设备连接。
+受信设备可以声明允许它们的控制身份。将互不信任的设备群放到各自的中继实例和代理信任域。无论是否启用外部账务，网站均须让发起此次会话的设备用户完成 OAuth 登录，并将其授权绑定到这台设备。网站控制台里另一位控制者的登录状态不能替代设备端用户的授权。设备代理按这次已验证的授权选取对应的 external principal，将它的控制凭据作为 Authorization Bearer 发送给中继。
 
-下面是 Nginx HTTPS 虚拟主机内的路由示例。将示例网段替换为设备 VPN 的真实网段。该限制使用 Nginx 观察到的连接源地址。将代理凭据保存在仅代理管理员可读的配置中。
+此例假设网站在本机 9000 端口提供内部鉴权接口。该接口校验设备携带的短期授权和当前请求，成功时返回 2xx，并在响应头 `X-SSMCP-Account-Authorization` 中写入该账户的完整 Bearer 值；授权缺失、过期或不匹配时返回 401。请将示例地址、路径和设备网段替换为本站的真实配置。网关没有内置这个网站接口。
 
 ```nginx
 location = /api/client/connect {
     allow 10.10.0.0/24;
     deny all;
+    auth_request /_ssmcp_device_oauth;
+    auth_request_set $verified_account_bearer $upstream_http_x_ssmcp_account_authorization;
     proxy_pass http://127.0.0.1:8080;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
     proxy_set_header X-SSMCP-Device-Ingress "<设备代理凭据原文>";
+    proxy_set_header Authorization $verified_account_bearer;
+}
+
+location = /_ssmcp_device_oauth {
+    internal;
+    proxy_pass http://127.0.0.1:9000/internal/ssmcp/device-authorization;
+    proxy_pass_request_body off;
+    proxy_set_header Content-Length "";
+    proxy_set_header X-SSMCP-Device-Ingress "";
+    proxy_set_header X-SSMCP-Account-Authorization "";
 }
 
 location = /mcp {
@@ -51,11 +63,7 @@ location = /mcp {
 }
 ```
 
-```sh
-ssmcp alice@relay.example.com --name workstation
-```
-
-设备的 `alice` 必须是配置中的身份。多位控制者可沿用客户端的 `--allow` 名单。访问设备目录和发出调用时，网关都校验调用身份与在线设备的允许名单。
+设备通过兼容的 WebSocket 客户端在 `Hello.metadata.allow` 中选取已配置的控制身份，例如 `alice@relay.example.com`。访问设备目录和发出调用时，网关都校验调用身份与在线设备的允许名单。
 
 ## 网站后端调用
 
@@ -81,7 +89,7 @@ curl --fail-with-body https://relay.example.com/mcp \
 
 网站负责登录、确认买家、收款和持久保存订单。中继按实际控制身份分别累计上下行字节，以两者中的较大值加旧格式历史用量计入当月账单。网站后端可读取该月余额，并为已核验的订单发放流量包。
 
-可在现有 `[relay]` 配置中增加下表。网站运营方从身份数据库核对每个账户的固定数字 ID，将其绑定到同名的已配置 external principal。CLI 沿用 `ssmcp alice@api.lmm.best`。更改显示名不会自动改变到账账户。每个中继最多保留 4096 个绑定；删除活跃配置后，原名称及数字 ID 仍保留给原绑定。新增用户按相同规则登记，重启中继加载配置。
+可在现有 `[relay]` 配置中增加下表。网站运营方从身份数据库核对每个账户的固定数字 ID，将其绑定到同名的已配置 external principal。更改显示名不会自动改变到账账户。每个中继最多保留 4096 个绑定；删除活跃配置后，原名称及数字 ID 仍保留给原绑定。新增用户按相同规则登记，重启中继加载配置。
 
 ```toml
 [relay.accounting]
@@ -98,6 +106,14 @@ bob = "456"
 ```
 
 `users` 必须覆盖此中继的全部 principals，一个名称对应一个数字 ID。专用账务凭据为随机的 64 位小写十六进制字符串，与控制、设备凭据分别生成。状态目录专供本套账务使用，属主为服务用户，权限为 0700；已建立的目录固定绑定 issuer 和月界 UTC 偏移。标准网关的本地收款沿用独立的 `[commerce]` 配置。
+
+### 外部账户的同时在线会话
+
+启用 `[relay.accounting]` 后，代理先验证设备和注册账户的绑定，再为 WebSocket Upgrade 覆盖两个请求头。`X-SSMCP-Device-Ingress` 使用原设备代理凭据，`Authorization: Bearer <该账户的控制凭据>` 使用该账户在 `[relay.principals]` 中配置的凭据原文。两种凭据都保存在受信代理或网站后端。代理从已通过 OAuth 的设备用户与设备的绑定记录选取账户，覆盖设备送来的两个头。设备填写的控制者用户名只决定共享对象。缺少或混用凭据时，握手返回 HTTP 401。
+
+中继按 `[relay.accounting.users]` 中的固定用户 ID 统计在线会话。免费账户第二条连接收到 `online_session_limit`；第一条断线后即可重新连接。成功充值的账户可以同时注册多个会话。WebSocket 上仍以现有 `Hello` 帧提交允许名单，后续流量按实际发起请求的控制者计费。
+
+未启用外部账务的中继同样核验注册账户，并沿用原有连接容量。此入口适用于受信代理和直接支持外部身份名单的设备端。使用 GitHub 身份预检的原生 CLI 不能直接用外部账户完成该预检；不要把网站控制凭据放进设备命令行。需要原生 CLI 和设备登录邀请的部署使用门户模式。
 
 ### 后端接口
 

@@ -7,14 +7,20 @@ use sha2::{Digest, Sha256};
 use std::{
     fs::File,
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 const AMBIGUOUS: &[u8] = b"multiple foreground sessions\n";
 
 pub(crate) struct Identity {
     pub(crate) signing_key: Ed25519KeyPair,
-    record: PathBuf,
-    _lease: File,
+    previous: Previous,
+}
+
+enum Previous {
+    Project { record: PathBuf, _lease: File },
+    // A window has a new identity and retains only its own relay reconnects.
+    Frontend(Mutex<Option<String>>),
 }
 
 impl Identity {
@@ -35,6 +41,9 @@ impl Identity {
         let Some(origin) = options.server.as_deref() else {
             return Ok(None);
         };
+        if options.frontend_owned {
+            return Self::for_frontend().map(Some);
+        }
         let mut allow = options.allow.clone();
         allow.sort_unstable();
         let mut roots = options
@@ -75,14 +84,34 @@ impl Identity {
         Self::open(&super::state_root()?, &scope).map(Some)
     }
 
+    fn for_frontend() -> Result<Self> {
+        let doc = Ed25519KeyPair::generate_pkcs8(&ring::rand::SystemRandom::new())
+            .map_err(|_| "could not create frontend identity")?;
+        Ok(Self {
+            signing_key: Ed25519KeyPair::from_pkcs8(doc.as_ref())
+                .map_err(|_| "invalid frontend identity")?,
+            previous: Previous::Frontend(Mutex::new(None)),
+        })
+    }
+
     // The old and the new connection IDs are hints until the relay verifies
     // the signature and ACL. No command, grant or claim is stored here.
     pub(crate) fn replace_previous(&self, current: Option<&str>) -> Result<Option<String>> {
         if let Some(id) = current {
             device_address::decode::<32>(id)?;
         }
-        let _gate = crate::session::lock(&self.record.with_extension("lock"), false)?;
-        let bytes = read_private_limit(&self.record, 1024)?;
+        let record = match &self.previous {
+            Previous::Frontend(previous) => {
+                let mut previous = previous.lock().unwrap_or_else(|e| e.into_inner());
+                return Ok(std::mem::replace(
+                    &mut *previous,
+                    current.map(str::to_owned),
+                ));
+            }
+            Previous::Project { record, .. } => record,
+        };
+        let _gate = crate::session::lock(&record.with_extension("lock"), false)?;
+        let bytes = read_private_limit(record, 1024)?;
         let Some(stored) = bytes.as_deref().filter(|b| *b != AMBIGUOUS) else {
             return Ok(None);
         };
@@ -91,7 +120,7 @@ impl Identity {
         if stored_key.public_key().as_ref() != self.signing_key.public_key().as_ref() {
             return Ok(None);
         }
-        let path = self.record.with_extension("previous");
+        let path = record.with_extension("previous");
         let public = device_address::encode(self.signing_key.public_key().as_ref());
         let prior = read_private_limit(&path, 512)?;
         if current.is_none() && prior.is_none() {
@@ -151,8 +180,10 @@ impl Identity {
         };
         Ok(Self {
             signing_key,
-            record: path,
-            _lease: lease,
+            previous: Previous::Project {
+                record: path,
+                _lease: lease,
+            },
         })
     }
 }
@@ -162,6 +193,23 @@ mod tests {
     use super::*;
     use ring::signature::KeyPair;
     use std::{fs, process::Command};
+
+    #[test]
+    fn frontend_reconnect_proofs_are_private_to_the_live_owner() {
+        let one = Identity::for_frontend().unwrap();
+        let two = Identity::for_frontend().unwrap();
+        assert_ne!(
+            one.signing_key.public_key().as_ref(),
+            two.signing_key.public_key().as_ref()
+        );
+        let a = device_address::encode(&[1; 32]);
+        let b = device_address::encode(&[2; 32]);
+        assert_eq!(one.replace_previous(Some(&a)).unwrap(), None);
+        assert_eq!(two.replace_previous(Some(&b)).unwrap(), None);
+        assert_eq!(one.replace_previous(Some(&b)).unwrap(), Some(a));
+        assert_eq!(two.replace_previous(None).unwrap(), Some(b));
+        assert_eq!(two.replace_previous(None).unwrap(), None);
+    }
 
     #[test]
     fn ordinary_foreground_restart_preserves_only_a_unique_project_identity() {
@@ -182,7 +230,7 @@ mod tests {
             } else if label == "other" {
                 vec!["bob@relay.example".into()]
             } else {
-                Vec::new()
+                vec!["alice@relay.example".into()]
             };
             if label == "allow" {
                 assert!(

@@ -174,6 +174,7 @@ Recipients 收件人视图按需加入画布。默认七列中首次打开它会
 | `/invite worker` | 显示关联池的外部 worker 接入提示；满员时提示当前限制 |
 | `/worker ls` | 查看关联 worker 池的实际席位和登记状态 |
 | `/worker +N` / `/worker -N` | 增加或减少关联池的席位 |
+| `/worker retire #03` | 在主终端选择 03 号工位退役，看到确认提示后再次输入可强制移除该工位 |
 | `/send 正文` | 向当前所选组、原生收件人或本地监听程序发送 |
 | `/paste-retry` / `/paste-retry discard` | 重试保存失败的长粘贴，或明确丢弃该保留原文 |
 | `/tasks` / `/tasks cancel JOB_ID` | 打开 Logs 右侧的任务列；显式 `cancel JOB_ID` 才取消指定任务 |
@@ -265,7 +266,7 @@ No 表示继续工作；只有本机真实用户的 Yes 才能让原提问线程
 
 ### 主窗口与 worker 窗口
 
-交互运行 `ssmcp --worker N` 时，当前窗口保留聊天输入，另一个窗口显示关联任务池。主窗口的 `ssmcp.ui.get` 投影 `/worker_pool` 提供实际 worker 客户端 ID、OS PID、连接状态、席位状态、排队数和已登记 worker 人数；其 `manager` 仅包含已绑定管理者的 `client_id` 与 `thread_id`，未绑定时为 `null`。外部 worker 登记并开始等待前，席位显示离线；创建席位本身不会启动模型。
+交互运行 `ssmcp alice@relay.example --worker N` 时，当前窗口保留聊天输入，另一个窗口显示关联任务池。主窗口的 `ssmcp.ui.get` 投影 `/worker_pool` 提供实际 worker 客户端 ID、OS PID、连接状态、席位状态、排队数和已登记 worker 人数；其 `manager` 仅包含已绑定管理者的 `client_id` 与 `thread_id`，未绑定时为 `null`。外部 worker 登记并开始等待前，席位显示离线；创建席位本身不会启动模型。
 
 独立 worker 监控窗口默认以全宽 **Agent progress** 时间线展示当前任务的真实进度上报，上方保留简短任务摘要和实际状态。没有进度上报时显示 `Waiting for agent progress updates`，命令启动和结束日志不会替代进度。警告、错误、取消提示与 `unknown` 仍在默认页显示；命令失败保留实际退出码、信号或取消结果，完整命令在日志详情查看。
 
@@ -283,7 +284,7 @@ Tab / Shift+Tab 或 ← / → 切换 worker，↑ / ↓、PgUp / PgDn 和滚轮�
 
 在主窗口输入 `/invite` 或 `/invite worker` 并按 Enter，分别生成协调 Agent 或关联池 worker 的接入提示。提示显示在本地可滚动面板，同时尝试复制到剪贴板。满员时显示 `Worker stations are fully staffed.`，不再生成额外邀请。邀请只提供接入信息；外部 agent 仍须实际连接、登记并主动等待。
 
-`/worker ls` 显示当前关联池，`/worker +N` 增加席位，`/worker -N` 请求减少席位。缩容先处理离线和空闲席位；执行中的任务继续遵守原领取者的完成与取消确认规则。监控面板和主窗口都以实际池状态刷新。[Worker 接入、任务与清理](workers.md)
+`/worker ls` 显示当前关联池，`/worker +N` 增加席位，`/worker -N` 请求减少席位。缩容先处理离线和空闲席位；执行中的任务继续遵守原领取者的完成与取消确认规则。如果某个工位已失联，无法交回退役回执，可在主终端输入 `/worker retire #03`。核对提示中的工位和任务，再次输入同一命令即可强制移除该工位。尚未确认的任务记为 `unknown`，其他工位继续处理原任务。[Worker 接入、任务与清理](workers.md)
 
 独立的收件人视图分别展示已登记成员和观测到的调用方。`Next caller` 是后续输入的收件选项，不计为在线成员。侧栏跟随当前选中项，显示它的身份、状态及相关消息；关闭侧栏后，足够宽的主区域会并排显示详情，较窄窗口保留完整列表导航。
 

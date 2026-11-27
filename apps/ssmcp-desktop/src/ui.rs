@@ -11,17 +11,11 @@ use zgpui::{
     native::{ButtonStyle, Canvas, Event as NativeEvent, Rect, Ui},
 };
 
-pub const BG: u32 = 0xf8f9fbff;
-const SURFACE: u32 = 0xffffffff;
-const TEXT: u32 = 0x253142ff;
-const MUTED: u32 = 0x667085ff;
-const LINE: u32 = 0xe5e9f0ff;
-const BLUE: u32 = 0x1a73e8ff;
-const BLUE_SOFT: u32 = 0xe8f0feff;
-const GREEN: u32 = 0x147d4eff;
-const AMBER: u32 = 0x996515ff;
-const RED: u32 = 0xb42318ff;
-const SIDE: f32 = 228.;
+pub use zgpui::native::colors::BG;
+use zgpui::native::colors::{
+    BLUE as ACCENT, BLUE_PALE as SELECTED, GREEN as SUCCESS, LINE, MUTED, RED, SURFACE, TEXT,
+};
+const SIDE: f32 = 256.;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Page {
@@ -46,6 +40,47 @@ impl Page {
     }
 }
 
+enum SidebarRow<'a> {
+    Page(Page, &'static str),
+    SessionsHeading,
+    Filter,
+    Session(usize, &'a Session),
+    SessionPages(usize),
+    Empty,
+    Control,
+    Disconnect,
+    Theme,
+    NamedSession,
+    ObserveNamed,
+    Setup,
+    Update,
+}
+
+fn sidebar_link(
+    canvas: &mut Canvas<'_>,
+    ui: &mut Ui,
+    id: u64,
+    rect: Rect,
+    label: &str,
+    selected: bool,
+    enabled: bool,
+) -> bool {
+    if selected {
+        canvas.rect(rect, 10., SELECTED);
+    }
+    let clicked = ui.button(canvas, id, rect, "", ButtonStyle::Quiet, enabled);
+    canvas.ellipsis(
+        label,
+        rect.x + 14.,
+        rect.y + (rect.h - 19.) / 2.,
+        rect.w - 28.,
+        15,
+        selected,
+        if enabled { TEXT } else { MUTED },
+    );
+    clicked
+}
+
 struct Layout {
     sequence: Counter,
     page: usize,
@@ -64,11 +99,27 @@ struct Pending {
     draft: Option<String>,
 }
 
+struct SessionTab {
+    target: Target,
+    control: bool,
+    draft: String,
+    unknown: Option<String>,
+}
+
 pub struct Desktop {
+    tabs: Vec<SessionTab>,
+    selected: Option<usize>,
+    next_session: Option<Target>,
+    sidebar_open: bool,
+    setup: bool,
     page: Page,
     session_filter: String,
     named_session: String,
+    sidebar_settings: bool,
+    sidebar_offset: usize,
     session_page: usize,
+    sidebar_redraw: bool,
+    toggle_theme: bool,
     composer: String,
     composer_editor: crate::composer::Composer,
     terminal_input: String,
@@ -99,10 +150,19 @@ pub struct Desktop {
 impl Default for Desktop {
     fn default() -> Self {
         Self {
+            tabs: Vec::new(),
+            selected: None,
+            next_session: None,
+            sidebar_open: false,
+            setup: false,
             page: Page::Conversation,
             session_filter: String::new(),
             named_session: String::new(),
+            sidebar_settings: false,
+            sidebar_offset: 0,
             session_page: 0,
+            sidebar_redraw: false,
+            toggle_theme: false,
             composer: String::new(),
             composer_editor: crate::composer::Composer::default(),
             terminal_input: String::new(),
@@ -145,11 +205,44 @@ impl Desktop {
         }
     }
 
+    pub fn notice(&mut self, text: String) {
+        self.local_notice = text;
+    }
+
+    pub fn take_sidebar_redraw(&mut self) -> bool {
+        std::mem::take(&mut self.sidebar_redraw)
+    }
+
+    pub fn take_theme_toggle(&mut self) -> bool {
+        std::mem::take(&mut self.toggle_theme)
+    }
+
+    pub fn take_setup(&mut self) -> bool {
+        std::mem::take(&mut self.setup)
+    }
+
     pub fn take_clipboard(&mut self) -> Option<String> {
         self.composer_editor.take_clipboard()
     }
 
     pub fn event(&mut self, event: &NativeEvent) -> bool {
+        if self.sidebar_open {
+            match event {
+                NativeEvent::Key { code: 27, .. } => {
+                    self.sidebar_open = false;
+                    return true;
+                }
+                NativeEvent::Scroll(delta) if self.pointer.0 < SIDE => {
+                    self.sidebar_offset = if *delta > 0 {
+                        self.sidebar_offset.saturating_sub(2)
+                    } else {
+                        self.sidebar_offset.saturating_add(2)
+                    };
+                    return true;
+                }
+                _ => {}
+            }
+        }
         if matches!(
             event,
             NativeEvent::Key {
@@ -187,7 +280,7 @@ impl Desktop {
                 }
             }
             NativeEvent::Move(x, y) | NativeEvent::Up(x, y) => self.pointer = (*x, *y),
-            NativeEvent::Scroll(delta) if self.pointer.0 > SIDE => {
+            NativeEvent::Scroll(delta) if !self.sidebar_open || self.pointer.0 > SIDE => {
                 if self.thread_picker {
                     self.thread_scroll = if *delta > 0 {
                         self.thread_scroll.saturating_sub(2)
@@ -211,6 +304,38 @@ impl Desktop {
     }
 
     pub fn sync(&mut self, view: &View) {
+        self.composer_editor
+            .set_available_commands(|capability| view.command(capability));
+        if let Some(target) = &view.target {
+            let index = self
+                .tabs
+                .iter()
+                .position(|tab| &tab.target == target)
+                .unwrap_or_else(|| {
+                    self.tabs.push(SessionTab {
+                        target: target.clone(),
+                        control: false,
+                        draft: String::new(),
+                        unknown: None,
+                    });
+                    self.tabs.len() - 1
+                });
+            if self.selected != Some(index) {
+                if let Some(previous) = self.selected {
+                    self.tabs[previous].draft = std::mem::take(&mut self.composer);
+                    self.tabs[previous].unknown = self.unknown_draft.take();
+                }
+                self.selected = Some(index);
+                self.composer = std::mem::take(&mut self.tabs[index].draft);
+                self.unknown_draft = self.tabs[index].unknown.take();
+                self.terminal_input.clear();
+                self.page = Page::Conversation;
+                self.layouts.clear();
+            }
+            if view.phase.connected() {
+                self.tabs[index].control = view.phase == Phase::Controlling;
+            }
+        }
         if self.reply_thread != view.thread || self.generation != view.generation {
             self.selected_message = None;
             self.message_boxes.clear();
@@ -246,6 +371,30 @@ impl Desktop {
                     }
                     if receipt.state == ReceiptState::Unknown {
                         self.unknown_draft = pending.draft.clone();
+                    }
+                }
+                if same_context
+                    && matches!(
+                        pending.command.as_str(),
+                        "session.cd" | "session.new" | "session.access"
+                    )
+                {
+                    if receipt.state == ReceiptState::Confirmed {
+                        if pending.draft.as_ref() == Some(&self.composer) {
+                            self.composer.clear();
+                        }
+                        if pending.command == "session.access" {
+                            self.local_notice = receipt.detail.clone();
+                            self.unknown_draft = None;
+                        }
+                        if let Some(target) = &receipt.new_session {
+                            self.next_session = Some(Target::Named(target.clone()));
+                        }
+                    } else {
+                        self.local_notice = receipt.detail.clone();
+                        if receipt.state == ReceiptState::Unknown {
+                            self.unknown_draft = pending.draft.clone();
+                        }
                     }
                 }
                 if pending.command == "terminal.write"
@@ -321,6 +470,8 @@ impl Desktop {
         }
         .map(str::to_owned);
         let draft = match command {
+            "session.new" if self.composer.trim() == "/new" => Some(self.composer.clone()),
+            "session.cd" | "session.access" => Some(self.composer.clone()),
             "chat.send" => arguments["text"].as_str().map(str::to_owned),
             "terminal.write"
                 if arguments["data"].as_str().is_some_and(|data| {
@@ -372,139 +523,128 @@ impl Desktop {
         if self.page != Page::Conversation {
             self.composer_editor.blur();
         }
-        self.sidebar(canvas, ui, handle, view, height);
-        let x = SIDE + 36.;
-        let w = (width - x - 36.).max(400.);
-        canvas.ellipsis(
-            view.target
-                .as_ref()
-                .map_or("连接你的工作会话", Target::label),
-            x,
-            31.,
-            w - 300.,
-            21,
-            false,
-            TEXT,
-        );
-        let (status_color, status) = match view.phase {
-            Phase::Controlling => (BLUE, "已获得控制租约"),
-            Phase::Observing => (GREEN, "实时观察 · 只读"),
-            Phase::Connecting => (AMBER, "正在建立受保护连接"),
-            Phase::Closing => (MUTED, "正在释放桌面连接"),
-            Phase::Disconnected => (MUTED, "使用已运行的本地 CLI 会话"),
+        if let Some(target) = self.next_session.take() {
+            self.send(
+                handle,
+                Intent::Connect {
+                    target,
+                    control: true,
+                },
+            );
+            return;
+        }
+        if ui.button(
+            canvas,
+            1,
+            Rect::new(10., 12., 42., 34.),
+            if self.sidebar_open { "×" } else { "☰" },
+            ButtonStyle::Quiet,
+            true,
+        ) {
+            self.sidebar_open = !self.sidebar_open;
+            if self.sidebar_open {
+                self.sidebar_settings = false;
+                self.sidebar_offset = 0;
+                self.composer_editor.blur();
+            }
+        }
+        let mut x = 24.;
+        if self.sidebar_open && width > 540. {
+            self.sidebar(canvas, ui, handle, view, height);
+            x += SIDE;
+        } else if self.sidebar_open {
+            self.sidebar(canvas, ui, handle, view, height);
+            return;
+        }
+        let w = (width - x - 24.).max(1.);
+        let start = if self.sidebar_open { x } else { x + 38. };
+        let right = width - 20.;
+        let max_tabs = (((right - start - 178.) / 94.).floor().max(1.)) as usize;
+        let first = self
+            .selected
+            .unwrap_or(0)
+            .saturating_add(1)
+            .saturating_sub(max_tabs);
+        let mut tab_x = start;
+        for index in first..self.tabs.len().min(first + max_tabs) {
+            let tab = &self.tabs[index];
+            let title = format!("会话 {}", index + 1);
+            if ui.button(
+                canvas,
+                6000 + index as u64,
+                Rect::new(tab_x, 12., 88., 34.),
+                &title,
+                ButtonStyle::Quiet,
+                self.pending.is_none() && !view.busy,
+            ) && self.selected != Some(index)
+            {
+                self.send(
+                    handle,
+                    Intent::Connect {
+                        target: tab.target.clone(),
+                        control: tab.control,
+                    },
+                );
+            }
+            if self.selected == Some(index) {
+                canvas.rect(Rect::new(tab_x + 14., 48., 60., 2.), 1., ACCENT);
+            }
+            tab_x += 94.;
+        }
+        if ui.button(
+            canvas,
+            4,
+            Rect::new(tab_x, 12., 76., 34.),
+            "新会话",
+            ButtonStyle::Quiet,
+            self.can_command(view, "session.new"),
+        ) {
+            self.command(handle, view, "session.new", json!({}));
+        }
+        let status = match view.phase {
+            Phase::Controlling => "已连接",
+            Phase::Observing => "只读",
+            Phase::Connecting => "连接中",
+            Phase::Closing => "断开中",
+            Phase::Disconnected => "未连接",
         };
-        canvas.rect(Rect::new(x, 66., 6., 6.), 3., status_color);
-        canvas.text(status, x + 14., 60., 12, false, MUTED);
-        let target = view.target.clone();
-        let right = x + w;
-        if ui.button(
-            canvas,
-            10,
-            Rect::new(right - 274., 27., 84., 36.),
-            "刷新状态",
-            ButtonStyle::Quiet,
-            view.phase.connected() && !view.busy,
-        ) {
-            self.send(handle, Intent::Refresh);
+        let color = match view.phase {
+            Phase::Controlling => ACCENT,
+            Phase::Observing => SUCCESS,
+            Phase::Connecting | Phase::Closing => MUTED,
+            Phase::Disconnected => MUTED,
+        };
+        canvas.rect(Rect::new(right - 80., 26., 7., 7.), 3., color);
+        if self.page == Page::Receipts
+            && self.can_command(view, "client.update")
+            && ui.button(
+                canvas,
+                110,
+                Rect::new(right - 95., 60., 92., 27.),
+                "安装更新",
+                ButtonStyle::Quiet,
+                true,
+            )
+        {
+            self.command(handle, view, "client.update", json!({"check":false}));
         }
-        if ui.button(
-            canvas,
-            11,
-            Rect::new(right - 182., 27., 86., 36.),
-            if view.phase == Phase::Controlling {
-                "切回观察"
-            } else {
-                "申请控制"
-            },
-            ButtonStyle::Secondary,
-            target.is_some()
-                && self.pending.is_none()
-                && !matches!(view.phase, Phase::Connecting | Phase::Closing),
-        ) {
-            if let Some(target) = target.clone() {
-                self.send(
-                    handle,
-                    Intent::Connect {
-                        target,
-                        control: view.phase != Phase::Controlling,
-                    },
-                );
-            }
+        canvas.ellipsis(status, right - 66., 21., 64., 12, false, MUTED);
+        canvas.line((x, 54.), (right, 54.), 1., LINE);
+        if !view.cwd.is_empty() {
+            canvas.ellipsis(&view.cwd, x, 64., w, 12, false, MUTED);
         }
-        if ui.button(
-            canvas,
-            12,
-            Rect::new(right - 88., 27., 88., 36.),
-            if view.phase.connected() {
-                "断开"
-            } else {
-                "重新连接"
-            },
-            ButtonStyle::Quiet,
-            target.is_some()
-                && self.pending.is_none()
-                && !matches!(view.phase, Phase::Connecting | Phase::Closing),
-        ) {
-            if view.phase.connected() {
-                self.send(handle, Intent::Disconnect);
-            } else if let Some(target) = target {
-                self.send(
-                    handle,
-                    Intent::Connect {
-                        target,
-                        control: false,
-                    },
-                );
-            }
-        }
-        let tabs = [
-            (Page::Conversation, "对话"),
-            (Page::Events, "事件"),
-            (Page::Terminal, "终端"),
-            (Page::Workers, "Worker"),
-            (Page::Receipts, "回执"),
-            (Page::Waits, "等待"),
-        ];
-        let tab_width = (w / tabs.len() as f32).min(94.);
-        for (index, (page, label)) in tabs.into_iter().enumerate() {
-            let rect = Rect::new(
-                x + index as f32 * tab_width,
-                99.,
-                (tab_width - 10.).max(1.),
-                36.,
-            );
-            let style = ButtonStyle::Quiet;
-            if ui.button(canvas, 20 + index as u64, rect, label, style, true) {
-                self.page = page;
-                self.thread_picker = false;
-            }
-            if self.page == page {
-                canvas.rect(Rect::new(rect.x + 18., 139., rect.w - 36., 2.), 1., BLUE);
-            }
-        }
-        canvas.line((x, 147.), (right, 147.), 1., LINE);
-        if view.busy || self.pending.is_some() {
-            canvas.ellipsis(
-                "正在等待实际回执…",
-                right - 220.,
-                74.,
-                220.,
-                13,
-                false,
-                AMBER,
-            );
-        }
-        let notice = if !self.local_notice.is_empty() {
-            &self.local_notice
-        } else {
+        let notice = if self.local_notice.is_empty() {
             &view.notice
+        } else {
+            &self.local_notice
         };
-        let notice_h = if notice.is_empty() { 0. } else { 48. };
-        if !notice.is_empty() {
-            canvas.rect(Rect::new(x, 160., w, 40.), 8., 0xf0f4faff);
-            canvas.ellipsis(notice, x + 14., 171., w - 28., 13, false, MUTED);
-        }
-        let bounds = Rect::new(x, 164. + notice_h, w, (height - 190. - notice_h).max(260.));
+        let top = if notice.is_empty() {
+            90.
+        } else {
+            canvas.ellipsis(notice, x, 90., w, 13, false, TEXT);
+            120.
+        };
+        let bounds = Rect::new(x, top, w, (height - top - 12.).max(120.));
         match self.page {
             Page::Conversation => self.conversation(canvas, ui, handle, view, bounds),
             Page::Events => self.events(canvas, ui, view, bounds),
@@ -526,150 +666,381 @@ impl Desktop {
         view: &View,
         height: f32,
     ) {
-        canvas.rect(Rect::new(0., 0., SIDE, height), 0., SURFACE);
-        canvas.line((SIDE, 0.), (SIDE, height), 1., LINE);
-        connection_mark(canvas, 23., 29., 28., TEXT);
-        canvas.text("ssmcp", 61., 30., 20, true, TEXT);
-        canvas.text("桌面工作台", 26., 73., 11, false, MUTED);
-        canvas.text("本地会话", 26., 114., 12, true, MUTED);
-        if ui.button(
-            canvas,
-            101,
-            Rect::new(152., 103., 52., 32.),
-            "刷新",
-            ButtonStyle::Quiet,
-            !view.sessions_loading,
-        ) {
-            self.send(handle, Intent::RefreshSessions);
-        }
-        if ui.input(
-            canvas,
-            102,
-            Rect::new(22., 144., 184., 38.),
-            &mut self.session_filter,
-            "筛选会话",
-            false,
-            true,
-        ) {
-            self.session_page = 0;
-        }
-        let filter = self.session_filter.to_lowercase();
-        let sessions: Vec<_> = view
-            .sessions
-            .iter()
-            .filter(|session| session.name.to_lowercase().contains(&filter))
-            .collect();
-        let per_page = ((height - 400.) / 62.).floor().max(2.) as usize;
-        let pages = sessions.len().div_ceil(per_page).max(1);
-        self.session_page = self.session_page.min(pages - 1);
-        let start = self.session_page * per_page;
-        for (offset, session) in sessions.iter().skip(start).take(per_page).enumerate() {
-            let y = 198. + offset as f32 * 62.;
-            let selected = view
-                .target
-                .as_ref()
-                .is_some_and(|target| matches!(target,Target::Named(name) if name==&session.name));
-            if selected {
-                canvas.rect(Rect::new(14., y - 3., 200., 57.), 8., BLUE_SOFT);
+        const TOP: f32 = 62.;
+        const ROW: f32 = 44.;
+        let footer = (height - 54.).max(TOP);
+        let visible = ((footer - TOP) / ROW).floor() as usize;
+        let mut rows = Vec::new();
+        if self.sidebar_settings {
+            rows.extend([
+                SidebarRow::Page(Page::Events, "事件"),
+                SidebarRow::Page(Page::Receipts, "回执"),
+                SidebarRow::Theme,
+                SidebarRow::Control,
+                SidebarRow::Disconnect,
+            ]);
+            if !view.window_sessions {
+                rows.extend([SidebarRow::NamedSession, SidebarRow::ObserveNamed]);
             }
-            if ui.button(
-                canvas,
-                200 + offset as u64,
-                Rect::new(20., y, 188., 32.),
-                &session.name,
-                ButtonStyle::Quiet,
-                self.pending.is_none() && !view.busy,
-            ) {
-                self.named_session = session.name.clone();
-                self.layouts.clear();
-                self.send(
-                    handle,
-                    Intent::Connect {
-                        target: Target::Named(session.name.clone()),
-                        control: false,
-                    },
+            rows.push(SidebarRow::Setup);
+            if view.command("client.update") {
+                rows.push(SidebarRow::Update);
+            }
+        } else {
+            rows.push(SidebarRow::SessionsHeading);
+            if view.sessions.len() > 4 || !self.session_filter.is_empty() {
+                rows.push(SidebarRow::Filter);
+            }
+            let filter = self.session_filter.to_lowercase();
+            let sessions: Vec<_> = view
+                .sessions
+                .iter()
+                .enumerate()
+                .filter(|(_, session)| session.name.to_lowercase().contains(&filter))
+                .collect();
+            let per_page = visible.saturating_sub(7).clamp(1, 5);
+            let pages = sessions.len().div_ceil(per_page).max(1);
+            self.session_page = self.session_page.min(pages - 1);
+            if sessions.is_empty() {
+                rows.push(SidebarRow::Empty);
+            } else {
+                rows.extend(
+                    sessions
+                        .into_iter()
+                        .skip(self.session_page * per_page)
+                        .take(per_page)
+                        .map(|(index, session)| SidebarRow::Session(index, session)),
                 );
             }
-            let label = match session.connection.as_str() {
-                "connected" => "CLI 已连接",
-                "disconnected" => "CLI 未连接",
-                _ => "状态待确认",
-            };
-            canvas.ellipsis(label, 32., y + 34., 168., 11, false, MUTED);
+            if pages > 1 {
+                rows.push(SidebarRow::SessionPages(pages));
+            }
+            rows.extend([
+                SidebarRow::Page(Page::Conversation, "对话"),
+                SidebarRow::Page(Page::Terminal, "终端"),
+                SidebarRow::Page(Page::Workers, "Workers"),
+                SidebarRow::Page(Page::Waits, "等待"),
+            ]);
         }
-        if sessions.is_empty() {
-            canvas.text(
-                if view.sessions_loading {
-                    "正在读取…"
-                } else {
-                    "还没有可列出的会话"
-                },
-                26.,
-                216.,
-                12,
-                false,
-                MUTED,
-            );
-        }
-        let paging_y = height - 180.;
-        if ui.button(
-            canvas,
-            103,
-            Rect::new(22., paging_y, 44., 30.),
-            "‹",
-            ButtonStyle::Quiet,
-            self.session_page > 0,
-        ) {
-            self.session_page -= 1;
-        }
-        canvas.text(
-            &format!("{} / {}", self.session_page + 1, pages),
-            87.,
-            paging_y + 8.,
-            12,
-            false,
-            MUTED,
+        let limit = rows.len().saturating_sub(visible);
+        self.sidebar_offset = self.sidebar_offset.min(limit);
+        canvas.rect(
+            Rect::new(0., 50., SIDE, (height - 50.).max(0.)),
+            0.,
+            SURFACE,
         );
-        if ui.button(
-            canvas,
-            104,
-            Rect::new(163., paging_y, 44., 30.),
-            "›",
-            ButtonStyle::Quiet,
-            self.session_page + 1 < pages,
-        ) {
-            self.session_page += 1;
+        canvas.line((SIDE, 0.), (SIDE, height), 1., LINE);
+        canvas.text(
+            if self.sidebar_settings {
+                "连接与设置"
+            } else {
+                "ssmcp"
+            },
+            62.,
+            18.,
+            17,
+            true,
+            TEXT,
+        );
+        for (index, row) in rows
+            .into_iter()
+            .skip(self.sidebar_offset)
+            .take(visible)
+            .enumerate()
+        {
+            let y = TOP + index as f32 * ROW;
+            let rect = Rect::new(12., y, SIDE - 24., ROW - 2.);
+            match row {
+                SidebarRow::Page(page, label) => {
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        20 + page.index() as u64,
+                        rect,
+                        label,
+                        self.page == page,
+                        true,
+                    ) {
+                        self.page = page;
+                        self.thread_picker = false;
+                        self.sidebar_open = false;
+                        self.sidebar_redraw = true;
+                    }
+                }
+                SidebarRow::SessionsHeading => {
+                    canvas.text(
+                        if view.window_sessions {
+                            "窗口会话"
+                        } else {
+                            "本地会话"
+                        },
+                        26.,
+                        y + 15.,
+                        12,
+                        true,
+                        MUTED,
+                    );
+                    if ui.button(
+                        canvas,
+                        101,
+                        Rect::new(SIDE - 68., y + 3., 54., 36.),
+                        "刷新",
+                        ButtonStyle::Quiet,
+                        !view.sessions_loading,
+                    ) {
+                        self.send(handle, Intent::RefreshSessions);
+                        if view.phase.connected() {
+                            self.send(handle, Intent::Refresh);
+                        }
+                    }
+                }
+                SidebarRow::Filter => {
+                    if ui.input(
+                        canvas,
+                        102,
+                        rect.inset(3.),
+                        &mut self.session_filter,
+                        "筛选会话",
+                        false,
+                        true,
+                    ) {
+                        self.session_page = 0;
+                        self.sidebar_redraw = true;
+                    }
+                }
+                SidebarRow::Session(session_index, session) => {
+                    let selected = matches!(view.target.as_ref(), Some(Target::Named(name)) if name == &session.name);
+                    if selected {
+                        canvas.rect(rect, 10., SELECTED);
+                    }
+                    let enabled = self.pending.is_none() && !view.busy;
+                    if ui.button(
+                        canvas,
+                        50_000 + session_index as u64,
+                        rect,
+                        "",
+                        ButtonStyle::Quiet,
+                        enabled,
+                    ) {
+                        self.named_session = session.name.clone();
+                        self.layouts.clear();
+                        self.send(
+                            handle,
+                            Intent::Connect {
+                                target: Target::Named(session.name.clone()),
+                                control: false,
+                            },
+                        );
+                    }
+                    canvas.ellipsis(
+                        &session.name,
+                        rect.x + 14.,
+                        y + 3.,
+                        rect.w - 28.,
+                        14,
+                        selected,
+                        if enabled { TEXT } else { MUTED },
+                    );
+                    let state = if view.window_sessions {
+                        "由本窗口创建"
+                    } else {
+                        match session.connection.as_str() {
+                            "connected" => "已连接",
+                            "disconnected" => "未连接",
+                            _ => "状态待确认",
+                        }
+                    };
+                    canvas.ellipsis(state, rect.x + 14., y + 23., rect.w - 28., 11, false, MUTED);
+                }
+                SidebarRow::SessionPages(pages) => {
+                    let right = rect.x + rect.w;
+                    if ui.button(
+                        canvas,
+                        51_100,
+                        Rect::new(rect.x, y + 2., 40., 38.),
+                        "‹",
+                        ButtonStyle::Quiet,
+                        self.session_page > 0,
+                    ) {
+                        self.session_page -= 1;
+                        self.sidebar_redraw = true;
+                    }
+                    let label = format!("{} / {}", self.session_page + 1, pages);
+                    let x = (SIDE - canvas.measure(&label, 12, false)) / 2.;
+                    canvas.text(&label, x, y + 13., 12, false, MUTED);
+                    if ui.button(
+                        canvas,
+                        51_101,
+                        Rect::new(right - 40., y + 2., 40., 38.),
+                        "›",
+                        ButtonStyle::Quiet,
+                        self.session_page + 1 < pages,
+                    ) {
+                        self.session_page += 1;
+                        self.sidebar_redraw = true;
+                    }
+                }
+                SidebarRow::Empty => {
+                    let label = if view.sessions_loading {
+                        "正在读取…"
+                    } else if !self.session_filter.is_empty() {
+                        "没有匹配的会话"
+                    } else {
+                        "暂无会话"
+                    };
+                    canvas.text(label, 26., y + 13., 13, false, MUTED);
+                }
+                SidebarRow::Theme => {
+                    if sidebar_link(canvas, ui, 51_102, rect, "切换明暗", false, true) {
+                        self.toggle_theme = true;
+                        self.sidebar_redraw = true;
+                    }
+                }
+                SidebarRow::Control => {
+                    let controlling = view.phase == Phase::Controlling;
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        11,
+                        rect,
+                        if controlling {
+                            "切回只读"
+                        } else {
+                            "申请控制"
+                        },
+                        false,
+                        view.target.is_some() && self.pending.is_none() && !view.busy,
+                    ) && let Some(target) = view.target.clone()
+                    {
+                        self.send(
+                            handle,
+                            Intent::Connect {
+                                target,
+                                control: !controlling,
+                            },
+                        );
+                    }
+                }
+                SidebarRow::Disconnect => {
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        12,
+                        rect,
+                        "断开连接",
+                        false,
+                        view.phase.connected() && self.pending.is_none(),
+                    ) {
+                        self.send(handle, Intent::Disconnect);
+                    }
+                }
+                SidebarRow::NamedSession => {
+                    ui.input(
+                        canvas,
+                        105,
+                        rect.inset(3.),
+                        &mut self.named_session,
+                        "输入已有会话名",
+                        false,
+                        true,
+                    );
+                }
+                SidebarRow::ObserveNamed => {
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        106,
+                        rect,
+                        "观察连接",
+                        false,
+                        !self.named_session.trim().is_empty()
+                            && self.named_session.len() <= 128
+                            && self.pending.is_none(),
+                    ) {
+                        self.layouts.clear();
+                        self.send(
+                            handle,
+                            Intent::Connect {
+                                target: Target::Named(self.named_session.trim().to_owned()),
+                                control: false,
+                            },
+                        );
+                    }
+                }
+                SidebarRow::Setup => {
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        108,
+                        rect,
+                        "连接设置",
+                        false,
+                        self.pending.is_none(),
+                    ) {
+                        self.setup = true;
+                    }
+                }
+                SidebarRow::Update => {
+                    if sidebar_link(
+                        canvas,
+                        ui,
+                        109,
+                        rect,
+                        "检查更新",
+                        false,
+                        self.pending.is_none(),
+                    ) {
+                        self.page = Page::Receipts;
+                        self.command(handle, view, "client.update", json!({"check":true}));
+                    }
+                }
+            }
         }
-        canvas.line((22., height - 137.), (206., height - 137.), 1., LINE);
-        ui.input(
+        canvas.line((24., footer), (SIDE - 24., footer), 1., LINE);
+        let width = if limit > 0 { SIDE - 110. } else { SIDE - 24. };
+        if sidebar_link(
             canvas,
-            105,
-            Rect::new(22., height - 119., 184., 36.),
-            &mut self.named_session,
-            "输入已有会话名",
+            ui,
+            107,
+            Rect::new(12., footer + 5., width, 42.),
+            if self.sidebar_settings {
+                "‹  返回导航"
+            } else {
+                "连接与设置  ›"
+            },
             false,
             true,
-        );
-        if ui.button(
-            canvas,
-            106,
-            Rect::new(22., height - 73., 184., 36.),
-            "观察连接",
-            ButtonStyle::Primary,
-            !self.named_session.trim().is_empty()
-                && self.named_session.len() <= 128
-                && self.pending.is_none(),
         ) {
-            self.layouts.clear();
-            self.send(
-                handle,
-                Intent::Connect {
-                    target: Target::Named(self.named_session.trim().to_owned()),
-                    control: false,
-                },
-            );
+            self.sidebar_settings = !self.sidebar_settings;
+            self.sidebar_offset = 0;
+            self.sidebar_redraw = true;
         }
-        canvas.text("原生界面 · 本地凭据", 26., height - 23., 11, false, MUTED);
+        if limit > 0 {
+            for (id, x, label, up) in [(103, SIDE - 94., "↑", true), (104, SIDE - 52., "↓", false)]
+            {
+                if ui.button(
+                    canvas,
+                    id,
+                    Rect::new(x, footer + 5., 40., 42.),
+                    label,
+                    ButtonStyle::Quiet,
+                    if up {
+                        self.sidebar_offset > 0
+                    } else {
+                        self.sidebar_offset < limit
+                    },
+                ) {
+                    self.sidebar_offset = if up {
+                        self.sidebar_offset.saturating_sub(visible.max(1))
+                    } else {
+                        self.sidebar_offset
+                            .saturating_add(visible.max(1))
+                            .min(limit)
+                    };
+                    self.sidebar_redraw = true;
+                }
+            }
+        }
     }
 
     fn conversation(
@@ -680,7 +1051,6 @@ impl Desktop {
         view: &View,
         bounds: Rect,
     ) {
-        canvas.text("共享对话", bounds.x, bounds.y, 19, true, TEXT);
         let title = match &view.thread {
             ThreadChoice::All => "全部来源",
             ThreadChoice::Main => "主会话",
@@ -707,18 +1077,22 @@ impl Desktop {
         ) {
             self.thread_picker = !self.thread_picker;
         }
-        let history_bounds = Rect::new(bounds.x, bounds.y + 48., bounds.w, bounds.h - 239.);
+        let suggestion_height =
+            if self.pending.is_none() && self.composer_editor.has_suggestions(&self.composer) {
+                crate::composer::SUGGESTION_HEIGHT
+            } else {
+                0.
+            };
+        let history_bounds = Rect::new(
+            bounds.x,
+            bounds.y + 36.,
+            bounds.w,
+            (bounds.h - 164. - suggestion_height).max(1.),
+        );
         if view.resource("conversation") {
             self.history(canvas, ui, &view.conversation, history_bounds, 0);
-        } else {
-            self.empty(
-                canvas,
-                history_bounds,
-                "在这里继续已有工作",
-                "连接一个 CLI 会话后，当前能力允许的对话与线程会显示在这里。",
-            );
         }
-        let y = bounds.y + bounds.h - 176.;
+        let y = bounds.y + bounds.h - 110.;
         canvas.line(
             (bounds.x, y - 15.),
             (bounds.x + bounds.w, y - 15.),
@@ -729,14 +1103,39 @@ impl Desktop {
             ThreadChoice::Agent(id) => view.agents.iter().any(|agent| &agent.id == id),
             _ => true,
         };
-        let can_send =
-            self.can_command(view, "chat.send") && view.can_send && !view.reloading && exact_target;
+        let verb = self.composer.split_whitespace().next();
+        let can_send = match crate::composer::SLASH_COMMANDS
+            .iter()
+            .find(|command| Some(command.verb) == verb)
+        {
+            Some(command) => self.can_command(view, command.capability),
+            None => {
+                self.can_command(view, "chat.send")
+                    && view.can_send
+                    && !view.reloading
+                    && exact_target
+            }
+        };
+        if suggestion_height > 0. {
+            self.composer_editor.draw_suggestions(
+                canvas,
+                ui,
+                Rect::new(
+                    bounds.x,
+                    y - 14. - suggestion_height,
+                    (bounds.w - 92.).max(1.),
+                    suggestion_height - 3.,
+                ),
+                &self.composer,
+            );
+        }
         self.composer_editor.draw(
             canvas,
             ui,
-            Rect::new(bounds.x, y, bounds.w - 116., 112.),
+            Rect::new(bounds.x, y, (bounds.w - 92.).max(1.), 64.),
             &self.composer,
             self.pending.is_none(),
+            "输入消息或命令…",
         );
         let unknown_same = self.unknown_draft.as_ref() == Some(&self.composer);
         let can_submit =
@@ -744,19 +1143,30 @@ impl Desktop {
         let clicked = ui.button(
             canvas,
             303,
-            Rect::new(bounds.x + bounds.w - 104., y + 32., 104., 48.),
-            "发送输入",
+            Rect::new(bounds.x + bounds.w - 80., y + 10., 80., 42.),
+            "发送",
             ButtonStyle::Primary,
             can_submit,
         );
         let shortcut = self.composer_editor.take_submit();
         if can_submit && (clicked || shortcut) {
-            self.command(
-                handle,
-                view,
-                "chat.send",
-                json!({"text":self.composer,"target":view.thread.input_target()}),
-            );
+            let input = self.composer.trim();
+            let (verb, arg) = input.split_once(char::is_whitespace).unwrap_or((input, ""));
+            match (verb, arg.trim()) {
+                ("/new", "") => self.command(handle, view, "session.new", json!({})),
+                ("/new", _) => self.local_notice = "用法：/new".into(),
+                ("/cd", "") => self.local_notice = "用法：/cd 目录".into(),
+                ("/cd", path) => self.command(handle, view, "session.cd", json!({"path":path})),
+                ("/allow", args) => {
+                    self.command(handle, view, "session.access", json!({"arguments":args}))
+                }
+                _ => self.command(
+                    handle,
+                    view,
+                    "chat.send",
+                    json!({"text":self.composer,"target":view.thread.input_target()}),
+                ),
+            }
         }
         let target = match &view.thread {
             ThreadChoice::Agent(id) => format!("目标线程：{id}"),
@@ -765,7 +1175,7 @@ impl Desktop {
         canvas.ellipsis(
             &target,
             bounds.x,
-            y + 125.,
+            y + 74.,
             bounds.w - 170.,
             12,
             false,
@@ -774,7 +1184,7 @@ impl Desktop {
         canvas.text(
             &format!("{} / 4096 B", self.composer.len()),
             bounds.x + bounds.w - 108.,
-            y + 125.,
+            y + 74.,
             11,
             false,
             MUTED,
@@ -784,22 +1194,22 @@ impl Desktop {
         } else if !exact_target {
             "所选线程不在当前线程页中；请重新选择后发送。"
         } else if view.reloading {
-            "CLI 正在重新加载连接，暂不能发送。"
+            "会话正在重新连接，暂不能发送。"
         } else if !view.receipt_capacity() {
             "回执容量已满，请先核对未解决的操作结果。"
         } else if !view.command("chat.send") {
             "发送需要控制连接与当前会话实际公布的输入能力。"
         } else {
-            "发送回执表示本地队列接收；实际投递状态见「回执 → 输入队列」。"
+            ""
         };
         canvas.ellipsis(
             hint,
             bounds.x,
-            y + 147.,
+            y + 94.,
             bounds.w,
             12,
             false,
-            if unknown_same { AMBER } else { MUTED },
+            if unknown_same { TEXT } else { MUTED },
         );
     }
 
@@ -838,12 +1248,9 @@ impl Desktop {
             self.message_boxes.clear();
         }
         if history.rows.is_empty() {
-            self.empty(
-                canvas,
-                bounds,
-                "等待真实记录",
-                "这里会显示当前进程实际保留的消息与事件。",
-            );
+            if page != 0 {
+                canvas.text("暂无事件", bounds.x, bounds.y, 13, false, MUTED);
+            }
             return;
         }
         if (self.layout_width - bounds.w).abs() > 1. {
@@ -916,11 +1323,11 @@ impl Desktop {
                         .as_ref()
                         .is_some_and(|(selected, _)| selected == id)
                 });
-                canvas.rect(card, 10., if selected { BLUE } else { LINE });
+                canvas.rect(card, 10., if selected { ACCENT } else { LINE });
                 canvas.rect(
                     card.inset(1.),
                     9.,
-                    if row.input_side { BLUE_SOFT } else { SURFACE },
+                    if row.input_side { SELECTED } else { SURFACE },
                 );
                 if page == 0
                     && let Some(id) = &row.message_id
@@ -947,7 +1354,7 @@ impl Desktop {
                     y + 13.,
                     12,
                     true,
-                    if row.kind == "answer" { BLUE } else { TEXT },
+                    if row.kind == "answer" { ACCENT } else { TEXT },
                 );
                 canvas.ellipsis(
                     &format!("{}  {}", row.source, row.status),
@@ -1035,7 +1442,7 @@ impl Desktop {
                         y + h - 20.,
                         10,
                         false,
-                        AMBER,
+                        TEXT,
                     );
                 }
             }
@@ -1151,7 +1558,7 @@ impl Desktop {
             bounds.w,
             (bounds.h - 220.).max(160.),
         );
-        canvas.rect(screen, 10., 0x20242bff);
+        canvas.rect(screen, 10., SURFACE);
         canvas.clip(screen.inset(15.));
         if terminal.screen.is_empty() {
             canvas.text(
@@ -1160,7 +1567,7 @@ impl Desktop {
                 screen.y + 21.,
                 14,
                 false,
-                0xb6becbff,
+                MUTED,
             );
         }
         let lines: Vec<_> = terminal.screen.lines().collect();
@@ -1186,7 +1593,7 @@ impl Desktop {
                         screen.y + 16. + row as f32 * 20.,
                         14,
                         false,
-                        0xe8edf3ff,
+                        TEXT,
                     );
                 }
                 previous_col = col;
@@ -1294,7 +1701,7 @@ impl Desktop {
             } else if !terminal.running {
                 "终端进程已退出；当前保留最后观察到的画面。"
             } else if !terminal.dimensions_confirmed {
-                "默认本地画布为 24 × 80；CLI 状态未提供实际尺寸。可显式调整所有终端。"
+                "当前会话尚未提供终端尺寸。默认画布为 24 × 80，可调整所有终端。"
             } else {
                 "实时 VT 文本投影 · 尺寸来自最近的调整回执 · 不补造连接前输出"
             },
@@ -1303,7 +1710,7 @@ impl Desktop {
             bounds.w,
             11,
             false,
-            if terminal.incomplete { AMBER } else { MUTED },
+            if terminal.incomplete { TEXT } else { MUTED },
         );
     }
 
@@ -1364,7 +1771,7 @@ impl Desktop {
         view: &View,
         bounds: Rect,
     ) {
-        canvas.text("Worker 资源", bounds.x, bounds.y, 19, true, TEXT);
+        canvas.text("Workers", bounds.x, bounds.y, 19, true, TEXT);
         let Some(workers) = &view.workers else {
             self.empty(
                 canvas,
@@ -1375,21 +1782,77 @@ impl Desktop {
             return;
         };
         let metrics = [
-            ("总容量", workers.total),
-            ("已登记", workers.registered),
-            ("工作中", workers.working),
-            ("待命", workers.idle),
-            ("离线", workers.offline),
-            ("退役中", workers.retiring),
+            ("Dreaming", workers.dreaming),
+            ("空闲", Some(workers.idle)),
+            ("工作中", Some(workers.working)),
+            ("离线", Some(workers.offline)),
+            ("退役中", Some(workers.retiring)),
+            ("总容量", Some(workers.total)),
+            ("已登记", Some(workers.registered)),
         ];
-        let mw = (bounds.w - 5. * 10.) / 6.;
+        let chart_width = 208.;
+        let side_by_side = workers.productivity.is_some() && bounds.w >= 600.;
+        let metric_width = bounds.w - if side_by_side { chart_width + 16. } else { 0. };
+        let columns = ((metric_width / 94.) as usize).clamp(2, metrics.len());
+        let rows = metrics.len().div_ceil(columns);
+        let mw = (metric_width - (columns - 1) as f32 * 10.) / columns as f32;
         for (index, (label, value)) in metrics.into_iter().enumerate() {
-            let x = bounds.x + index as f32 * (mw + 10.);
-            canvas.rect(Rect::new(x, bounds.y + 43., mw, 76.), 8., SURFACE);
-            canvas.text(label, x + 12., bounds.y + 55., 11, false, MUTED);
-            canvas.text(&value.to_string(), x + 12., bounds.y + 80., 24, true, TEXT);
+            let x = bounds.x + (index % columns) as f32 * (mw + 10.);
+            let y = bounds.y + 43. + (index / columns) as f32 * 86.;
+            canvas.rect(Rect::new(x, y, mw, 76.), 8., SURFACE);
+            canvas.ellipsis(
+                label,
+                x + 12.,
+                y + 12.,
+                (mw - 24.).max(1.),
+                11,
+                false,
+                MUTED,
+            );
+            canvas.text(
+                &value.map_or_else(|| "—".into(), |count| count.to_string()),
+                x + 12.,
+                y + 37.,
+                24,
+                true,
+                TEXT,
+            );
         }
-        let y = bounds.y + 136.;
+        let mut y = bounds.y + 136. + (rows - 1) as f32 * 86.;
+        if let Some(calls) = workers.productivity {
+            let (x, chart_y) = if side_by_side {
+                (bounds.x + metric_width + 16., bounds.y + 43.)
+            } else {
+                let chart_y = y - 6.;
+                y += 106.;
+                (bounds.x, chart_y)
+            };
+            let width = chart_width.min(bounds.w);
+            canvas.text(
+                "Worker 工具调用 / 分钟（对数）",
+                x,
+                chart_y,
+                11,
+                false,
+                MUTED,
+            );
+            let base = chart_y + 72.;
+            let peak = calls.iter().copied().max().unwrap_or(0).max(1) as f64;
+            let mut previous = None;
+            for (index, count) in calls.into_iter().enumerate() {
+                let point = (
+                    x + index as f32 * (width - 4.) / 9.,
+                    base - (48. * (count as f64).ln_1p() / peak.ln_1p()) as f32,
+                );
+                if let Some(last) = previous {
+                    canvas.line(last, point, 1., ACCENT);
+                }
+                canvas.rect(Rect::new(point.0, point.1, 3., 3.), 1., ACCENT);
+                previous = Some(point);
+            }
+            canvas.text("−10 分钟", x, base + 8., 10, false, MUTED);
+            canvas.text("现在", x + width - 26., base + 8., 10, false, MUTED);
+        }
         canvas.text("目标容量", bounds.x, y + 11., 13, false, MUTED);
         ui.input(
             canvas,
@@ -1423,6 +1886,12 @@ impl Desktop {
                 json!({"pool_generation":workers.generation,"total":total}),
             );
         }
+        let narrow = bounds.w < 520.;
+        let (summary_x, summary_y) = if narrow {
+            (bounds.x, y + 46.)
+        } else {
+            (bounds.x + 300., y + 12.)
+        };
         canvas.ellipsis(
             &format!(
                 "当前目标 {} · 排队任务 {}{}",
@@ -1434,92 +1903,111 @@ impl Desktop {
                     ""
                 }
             ),
-            bounds.x + 300.,
-            y + 12.,
-            bounds.w - 300.,
+            summary_x,
+            summary_y,
+            (bounds.x + bounds.w - summary_x).max(1.),
             12,
             false,
             MUTED,
         );
-        canvas.text("站位", bounds.x + 14., y + 63., 12, true, MUTED);
-        canvas.text("状态", bounds.x + 104., y + 63., 12, true, MUTED);
-        canvas.text("任务 / 进度", bounds.x + 242., y + 63., 12, true, MUTED);
-        let body = Rect::new(bounds.x, y + 88., bounds.w, (bounds.h - 256.).max(80.));
-        let total_h = workers.slots.len() as f32 * 89.;
-        self.scroll[3] = self.scroll[3].min((total_h - body.h).max(0.));
+        let list_y = if narrow {
+            y + 75.
+        } else {
+            canvas.text("站位", bounds.x + 14., y + 63., 12, true, MUTED);
+            canvas.text("状态", bounds.x + 104., y + 63., 12, true, MUTED);
+            canvas.text("任务 / 进度", bounds.x + 262., y + 63., 12, true, MUTED);
+            y + 88.
+        };
+        let body = Rect::new(
+            bounds.x,
+            list_y,
+            bounds.w,
+            (bounds.y + bounds.h - list_y - 24.).max(1.),
+        );
+        let row_height = if narrow { 136. } else { 86. };
+        let stride = row_height + 8.;
+        self.scroll[3] = self.scroll[3].min((workers.slots.len() as f32 * stride - body.h).max(0.));
         canvas.clip(body);
         for (index, worker) in workers.slots.iter().enumerate() {
-            let y = body.y + index as f32 * 89. - self.scroll[3];
-            if y + 81. < body.y || y > body.y + body.h {
+            let y = body.y + index as f32 * stride - self.scroll[3];
+            if y + row_height < body.y || y > body.y + body.h {
                 continue;
             }
-            canvas.rect(Rect::new(body.x, y, body.w, 80.), 8., SURFACE);
+            canvas.rect(Rect::new(body.x, y, body.w, row_height), 8., SURFACE);
             canvas.text(
-                &worker.slot.to_string(),
+                &worker.station_label(),
                 body.x + 14.,
-                y + 14.,
+                y + 12.,
                 17,
                 true,
                 TEXT,
             );
+            let (epoch_x, epoch_y, epoch_w) = if narrow {
+                (body.x + 50., y + 16., 76.)
+            } else {
+                (body.x + 14., y + 45., 82.)
+            };
             canvas.ellipsis(
                 &format!("epoch {}", worker.epoch),
-                body.x + 14.,
-                y + 45.,
-                82.,
+                epoch_x,
+                epoch_y,
+                epoch_w,
                 10,
                 false,
                 MUTED,
             );
-            let state = if worker.retiring {
-                "退役中"
-            } else {
-                worker_label(&worker.state)
-            };
-            canvas.text(
-                state,
-                body.x + 104.,
+            let state_x = body.x + if narrow { 136. } else { 104. };
+            canvas.ellipsis(
+                worker_label(&worker.state),
+                state_x,
                 y + 14.,
+                (body.x + body.w - state_x - 14.).clamp(1., 144.),
                 13,
                 true,
                 if worker.state == "working" {
-                    BLUE
+                    ACCENT
                 } else if worker.registered {
-                    GREEN
+                    SUCCESS
                 } else {
                     MUTED
                 },
             );
+            let metadata_x = body.x + if narrow { 14. } else { 104. };
             canvas.text(
-                if worker.registered {
-                    "已登记"
-                } else {
-                    "未登记"
-                },
-                body.x + 104.,
-                y + 43.,
+                worker.registration_label(),
+                metadata_x,
+                y + 37.,
                 11,
                 false,
                 MUTED,
             );
+            if worker.quiet_10m == Some(true) {
+                canvas.text("10 分钟无工具调用", metadata_x, y + 59., 11, false, MUTED);
+            }
+            let (task_x, task_y) = if narrow {
+                (body.x + 14., y + 85.)
+            } else {
+                (body.x + 262., y + 14.)
+            };
+            let task_width = (body.x + body.w - task_x - 14.).max(1.);
             canvas.ellipsis(
                 if worker.task.is_empty() {
                     "暂无任务"
                 } else {
                     &worker.task
                 },
-                body.x + 242.,
-                y + 14.,
-                body.w - 260.,
+                task_x,
+                task_y,
+                task_width,
                 13,
                 false,
                 TEXT,
             );
             canvas.ellipsis(
                 &format!("{}  {}", worker.progress, worker.elapsed),
-                body.x + 242.,
-                y + 43.,
-                body.w - 260.,
+                task_x,
+                task_y + 23.,
+                task_width,
                 12,
                 false,
                 MUTED,
@@ -1594,7 +2082,7 @@ impl Desktop {
                     canvas,
                     body,
                     "这一页没有输入记录",
-                    "队列状态来自 CLI；本地入队并不等于模型已读取。",
+                    "队列显示当前会话的消息投递进度。",
                 );
             }
             self.scroll[4] = self.scroll[4].min((view.queue.len() as f32 * 122. - body.h).max(0.));
@@ -1611,7 +2099,7 @@ impl Desktop {
                     y + 14.,
                     13,
                     true,
-                    if item.uncertain { AMBER } else { TEXT },
+                    if item.uncertain { MUTED } else { TEXT },
                 );
                 canvas.ellipsis(
                     &format!("目标 {} · {}", item.target, item.id),
@@ -1637,7 +2125,7 @@ impl Desktop {
                     } else if item.retarget_required {
                         "目标需要重新选择；客户端不会自动转发。"
                     } else {
-                        "显示 CLI 的真实队列状态。"
+                        "显示当前会话的投递状态。"
                     },
                     body.x + 16.,
                     y + 78.,
@@ -1693,10 +2181,10 @@ impl Desktop {
                 }
                 canvas.rect(Rect::new(body.x, y, body.w, 137.), 8., SURFACE);
                 let color = match receipt.state {
-                    ReceiptState::Unknown => AMBER,
+                    ReceiptState::Unknown => TEXT,
                     ReceiptState::Rejected => RED,
-                    ReceiptState::Confirmed => GREEN,
-                    ReceiptState::Sending => BLUE,
+                    ReceiptState::Confirmed => SUCCESS,
+                    ReceiptState::Sending => ACCENT,
                 };
                 canvas.text(
                     receipt.state.label(),
@@ -1966,6 +2454,7 @@ fn kind_label(kind: &str) -> &str {
 
 fn worker_label(state: &str) -> &str {
     match state {
+        "dreaming" => "☾ Dreaming",
         "working" => "工作中",
         "standby" | "idle" => "待命",
         "offline" => "离线",
@@ -2034,6 +2523,7 @@ mod receipt_regressions {
             command: Id::new(command).unwrap(),
             state: ReceiptState::Confirmed,
             detail: String::new(),
+            new_session: None,
         }
     }
 

@@ -1300,7 +1300,11 @@ async fn public_member_tool_window_counts_direct_inbox_and_multi_target_await_on
         .await
         .is_err()
     );
-    let members = fixture.session.collaboration.worker_activity().unwrap();
+    let members = fixture
+        .session
+        .collaboration
+        .worker_activity(false)
+        .unwrap();
     let count = |who: &Value| {
         members
             .iter()

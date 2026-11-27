@@ -20,6 +20,10 @@ on:
           - linux
           - windows
           - android
+      linux_archive_run:
+        description: Optional existing GUI run ID for Linux two-window acceptance of this exact source
+        required: false
+        type: string
   workflow_call:
     inputs:
       ref:
@@ -54,10 +58,15 @@ jobs:
         env:
           REQUESTED_REF: ${{ inputs.ref }}
           REQUESTED_PLATFORM: ${{ inputs.platform }}
+          ARCHIVE_RUN: ${{ inputs.linux_archive_run }}
         run: |
           set -euo pipefail
           if [[ ! "$REQUESTED_REF" =~ ^[0-9a-fA-F]{40}$ ]]; then
             echo '::error::ref must be a full 40-character commit SHA, not a branch or tag.'
+            exit 1
+          fi
+          if [[ -n "$ARCHIVE_RUN" && ( "$REQUESTED_PLATFORM" != linux || ! "$ARCHIVE_RUN" =~ ^[1-9][0-9]{0,19}$ ) ]]; then
+            echo '::error::An existing archive run requires platform linux and a numeric run ID.'
             exit 1
           fi
           case "$REQUESTED_PLATFORM" in
@@ -295,7 +304,7 @@ jobs:
   linux:
     name: Linux desktop Release and X11 window
     needs: validate
-    if: needs.validate.outputs.linux == 'true'
+    if: needs.validate.outputs.linux == 'true' && !inputs.linux_archive_run
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     env:
@@ -333,7 +342,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libx11-dev libfreetype6-dev libfontconfig1-dev libgl1-mesa-dev \
-            xvfb xauth x11-utils mesa-utils libgl1-mesa-dri fonts-noto-cjk
+            xvfb xauth x11-utils mesa-utils libgl1-mesa-dri fonts-noto-cjk xdotool imagemagick
       - name: Install Rust 1.100.0 for native Linux
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca
         with:
@@ -421,7 +430,9 @@ jobs:
           deadline = started + 30
           probe_text = ""
           with (evidence / "window.log").open("w") as log:
-              process = subprocess.Popen([str(binary), "--exit-after-ms", "10000"], stdout=log, stderr=subprocess.STDOUT)
+              first_frame = evidence / "first-frame.json"
+              process = subprocess.Popen([str(binary), "--exit-after-ms", "10000",
+                                          "--first-frame-receipt", str(first_frame)], stdout=log, stderr=subprocess.STDOUT)
               try:
                   while process.poll() is None and time.monotonic() < deadline:
                       try:
@@ -436,6 +447,26 @@ jobs:
                           window.update(mapped=True, width=int(width[1]), height=int(height[1]))
                           break
                       time.sleep(0.1)
+                  if window["mapped"]:
+                      while not first_frame.is_file() and time.monotonic() < deadline and process.poll() is None:
+                          time.sleep(0.05)
+                      if not first_frame.is_file():
+                          raise RuntimeError("The mapped window did not render its connection form")
+                      wid = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--name",
+                                                     "^ssmcp-desktop$"], text=True, timeout=3).strip()
+                      def capture(name):
+                          subprocess.run(["import", "-silent", "-window", wid, str(evidence / name)],
+                                         check=True, timeout=4)
+                      capture("first-run.png")
+                      subprocess.run(["xdotool", "windowfocus", "--sync", wid], check=True, timeout=3)
+                      subprocess.run(["xdotool", "type", "--clearmodifiers", "Alice"], check=True, timeout=3)
+                      subprocess.run(["xdotool", "key", "Return"], check=True, timeout=3)
+                      time.sleep(0.25)
+                      capture("first-run-consent.png")
+                      subprocess.run(["xdotool", "windowsize", "--sync", wid, "430", "575"],
+                                     check=True, timeout=3)
+                      time.sleep(0.25)
+                      capture("first-run-narrow.png")
                   process.wait(timeout=max(0.001, deadline - time.monotonic()))
               finally:
                   if process.poll() is None:
@@ -479,6 +510,90 @@ jobs:
           path: ${{ runner.temp }}/ssmcp-gui-ci-linux
           if-no-files-found: warn
           retention-days: 7
+
+  linux-sessions:
+    name: Linux release independent desktop sessions
+    needs: [validate, linux]
+    if: >-
+      always() && !cancelled() && needs.validate.result == 'success' && needs.validate.outputs.linux == 'true' &&
+      (needs.linux.result == 'success' || (inputs.linux_archive_run && needs.linux.result == 'skipped'))
+    permissions:
+      contents: read
+      actions: read
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      LIBGL_ALWAYS_SOFTWARE: '1'
+      GALLIUM_DRIVER: llvmpipe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ needs.validate.outputs.ref }}
+          persist-credentials: false
+      - name: Load the current acceptance script when checking an earlier archive
+        if: inputs.linux_archive_run
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          path: acceptance-harness
+          sparse-checkout: scripts/e2e_desktop_windows.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Install the session and display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends dbus-user-session xvfb xauth xdotool \
+            python3-xlib python3-pil libgl1 libgl1-mesa-dri libglx-mesa0 libx11-6 libfreetype6 libfontconfig1 fonts-noto-cjk
+      - name: Prepare the Linux user manager and verify delegated limits
+        id: desktop_manager
+        shell: bash
+        run: bash scripts/ci_user_manager.sh prepare
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ssmcp-gui-linux
+          run-id: ${{ inputs.linux_archive_run || github.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/ssmcp-gui-release
+      - name: Verify and exercise both executables from the release archive
+        shell: bash
+        env:
+          SSMCP_DESKTOP_E2E_EVIDENCE: ${{ runner.temp }}/native-session-diagnostics
+          REUSE_ARCHIVE: ${{ inputs.linux_archive_run }}
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/ssmcp-gui-release"
+          PYTHONPATH=scripts /usr/bin/python3 - "$bundle" <<'PY'
+          import json, sys, tarfile
+          from pathlib import Path
+          import release
+          bundle = Path(sys.argv[1])
+          receipt = json.loads((bundle / release.gui_receipt_name("linux")).read_text())
+          source = release.gui_source(Path.cwd(), "linux")
+          if receipt["source"] != source:
+              raise SystemExit("The release archive belongs to a different source revision")
+          archive = bundle / release.GUI_CLIENTS["linux"]["asset"]
+          release.verify_linux_gui_archive(archive, source, receipt["window"], receipt["companion_cli"])
+          with tarfile.open(archive, "r:gz") as package:
+              for name in ("ssmcp", "ssmcp-desktop"):
+                  package.extract(name, bundle, filter="data")
+          PY
+          script=scripts/e2e_desktop_windows.py
+          if [[ -n "$REUSE_ARCHIVE" ]]; then script="acceptance-harness/$script"; fi
+          export PYTHONPATH="$GITHUB_WORKSPACE/scripts"
+          xvfb-run --auto-servernum --server-args='-screen 0 1280x900x24 +extension GLX -nolisten tcp' \
+            /usr/bin/python3 "$script" "$bundle/ssmcp-desktop"
+      - name: Keep cropped native diagnostics after an acceptance failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-session-diagnostics-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-session-diagnostics
+          if-no-files-found: ignore
+          retention-days: 3
+      - name: Restore temporary runner settings
+        if: always() && steps.desktop_manager.outcome != 'skipped'
+        shell: bash
+        run: bash scripts/ci_user_manager.sh restore
 
   windows:
     name: Windows CLI, process/IPC, and desktop acceptance
@@ -529,7 +644,7 @@ jobs:
         run: |
           $tokens = $null
           $errors = $null
-          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/e2e_windows_desktop.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/e2e_windows_web_app.ps1", [ref]$tokens, [ref]$errors) | Out-Null
           if ($errors) { throw ($errors | Out-String) }
 
       - name: Install Rust 1.100.0 for native Windows
@@ -724,13 +839,13 @@ jobs:
           sys.exit(0 if report['status'] == 'passed' else 1)
           '@ | python -
           if ($LASTEXITCODE -ne 0) { throw 'Empty Windows overview acceptance failed; inspect overview-result.json.' }
-      - name: Launch and capture the actual Windows desktop executable
+      - name: Open two packaged system Edge windows and verify their independent gateways
         id: desktop_runtime
         if: ${{ !cancelled() && steps.native.outcome == 'success' }}
         run: |
           $evidence = Join-Path $env:RUNNER_TEMP 'ssmcp-gui-ci-windows'
           $executable = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/debug/ssmcp-desktop.exe'
-          & pwsh -NoLogo -NoProfile -File scripts/e2e_windows_desktop.ps1 -Binary $executable -EvidenceDirectory (Join-Path $evidence 'desktop-runtime') -SourceCommit $env:SOURCE_COMMIT
+          & pwsh -NoLogo -NoProfile -File scripts/e2e_windows_web_app.ps1 -Binary $executable -EvidenceDirectory (Join-Path $evidence 'desktop-runtime') -SourceCommit $env:SOURCE_COMMIT
           if ($LASTEXITCODE -ne 0) { throw 'Desktop runtime acceptance failed or was blocked; inspect desktop-runtime/result.json.' }
 
       - name: Package the tested Windows debug executable
@@ -775,7 +890,7 @@ jobs:
             ('- Actual CLI and private process/IPC lifecycle: {0}' -f $env:CLI_OUTCOME)
             ('- Empty current-user overview without registry creation: {0}; execution step: {1}' -f $overviewStatus, $env:OVERVIEW_OUTCOME)
             ('- Actual desktop window: {0}; execution step: {1}' -f $desktopStatus, $env:DESKTOP_OUTCOME)
-            '- Evidence: executable hashes, private lifecycle report, owned window metadata, captured PNG, and stdout/stderr.'
+            '- Evidence: executable hashes, private lifecycle report, two system Edge app windows, their accessible forms, and gateway shutdown.'
             '- Scope: isolated fixtures and a bounded desktop window; no external account, live session, installed service, or human visual acceptance.'
           ) | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
@@ -908,6 +1023,40 @@ jobs:
           fi
           grep -Fx "Pkg.Revision = $ndk_revision" "$ANDROID_NDK_HOME/source.properties"
           apps/ssmcp-android/build-native.sh 2>&1 | tee "$ANDROID_EVIDENCE_DIR/native-build.log"
+
+      - name: Package the same arm64 CLI as an installable Magisk module
+        if: github.event_name == 'workflow_dispatch' && github.workflow == 'GUI clients'
+        run: |
+          set -euo pipefail
+          module="$RUNNER_TEMP/magisk/packaging/magisk"
+          mkdir -p "$RUNNER_TEMP/magisk"
+          git archive "$SOURCE_COMMIT" packaging/magisk/kam.toml packaging/magisk/src |
+            tar -x -C "$RUNNER_TEMP/magisk"
+          # The normal hook compiles the CLI. The preceding step built this exact
+          # revision for API 26, so stage its executable and package it with Kam.
+          executable="$PWD/apps/ssmcp-android/app/src/main/jniLibs/arm64-v8a/libssmcp.so"
+          cmp "$executable" "${CARGO_TARGET_DIR:-$PWD/target}/aarch64-linux-android/release/ssmcp"
+          install -Dm755 "$executable" "$module/src/ssmcp/bin/ssmcp"
+          mkdir -p "$module/hooks"
+          cargo install --locked --git https://github.com/MemDeco-WG/Kam.git --rev 74f50bd219f88633d8cd07d61e89d05478b2fd55 kam
+          kam_bin="${CARGO_HOME:-$HOME/.cargo}/bin/kam"
+          (cd "$module" && "$kam_bin" export && "$kam_bin" check && "$kam_bin" build)
+          archive="$module/dist/ssmcp-magisk-arm64.zip"
+          cmp "$executable" <(unzip -p "$archive" bin/ssmcp)
+          PYTHONPATH=scripts python3 -c 'from pathlib import Path; import release, sys; root=Path.cwd(); release.verify_magisk_archive(root, Path(sys.argv[1]), release.version(root))' "$archive"
+          (cd "$module/dist" && sha256sum ssmcp-magisk-arm64.zip > ssmcp-magisk-arm64.zip.sha256)
+
+      - name: Retain the installable Magisk module
+        if: github.event_name == 'workflow_dispatch' && github.workflow == 'GUI clients'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ssmcp-magisk-arm64
+          path: |
+            ${{ runner.temp }}/magisk/packaging/magisk/dist/ssmcp-magisk-arm64.zip
+            ${{ runner.temp }}/magisk/packaging/magisk/dist/ssmcp-magisk-arm64.zip.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Restore Gradle dependency cache
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1

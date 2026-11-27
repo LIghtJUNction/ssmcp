@@ -213,7 +213,7 @@ fn published_update_wins_over_connection_notice_in_either_arrival_order() {
         for published in [None, Some("1.2.4")] {
             for release_first in [true, false] {
                 let mut state = preview(width);
-                let release = Notice::Release("ssmcp update --check · v1.2.5 available".into());
+                let release = Notice::Release("/update --check · v1.2.5 available".into());
                 let connection = Notice::Connection(connection_fixture(published));
                 let (first, second) = if release_first {
                     (release.clone(), connection)
@@ -224,7 +224,7 @@ fn published_update_wins_over_connection_notice_in_either_arrival_order() {
                 offer(&mut state, second, |_| false);
                 assert_eq!(state.update_notice.as_ref(), Some(&release));
                 let (_, screen) = rendered(&mut state);
-                assert!(screen.contains("ssmcp update --check"), "{width}: {screen}");
+                assert!(screen.contains("/update --check"), "{width}: {screen}");
                 assert!(screen.contains("v1.2.5"), "{width}: {screen}");
                 assert_eq!(state.rendered_update_notice.as_ref(), Some(&release));
                 assert!(state.actions.is_empty());
@@ -257,12 +257,12 @@ fn hidden_update_survives_a_new_session_and_waits_for_complete_terminal_output()
     }
 
     for width in [120, 48] {
-        let release = Notice::Release(format!("ssmcp update --check · v333.2.{width} available"));
+        let release = Notice::Release(format!("/update --check · v333.2.{width} available"));
         let mut old = preview(width);
         old.conversation.composer.set_text("keep the unsent draft");
         assert!(offer(&mut old, release.clone(), was_shown));
         let (_, screen) = rendered(&mut old);
-        assert!(!screen.contains("ssmcp update --check"));
+        assert!(!screen.contains("/update --check"));
         assert!(old.rendered_update_notice.is_none());
         assert!(!was_shown(&release));
         assert_eq!(old.conversation.composer.text(), "keep the unsent draft");
@@ -271,7 +271,7 @@ fn hidden_update_survives_a_new_session_and_waits_for_complete_terminal_output()
         let mut next = preview(width);
         assert!(offer(&mut next, release.clone(), was_shown));
         let (frame, screen) = rendered(&mut next);
-        assert!(screen.contains("ssmcp update --check"), "{width}: {screen}");
+        assert!(screen.contains("/update --check"), "{width}: {screen}");
         let bytes = frame.diff(None);
         let mut pending = next.rendered_update_notice.take();
         assert_eq!(pending.as_ref(), Some(&release));

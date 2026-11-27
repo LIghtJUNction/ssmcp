@@ -968,7 +968,7 @@ def main():
             parser.error(f"missing {executable}; build the binaries and vt_snapshot first")
     started = time.monotonic()
     report = {"status": "failed", "platform": platform.system(),
-              "transport": "production account router over loopback HTTP/WebSocket, synthetic GitHub provider",
+              "transport": "production account router over loopback HTTPS/WSS, synthetic GitHub provider",
               "scope": "real composer, queue revisions, same-process drafts, exact recipients, and RAM reset on local reexec; no models",
               "binaries": {name: sha256(path) for name, path in (
                   ("ssmcp", args.bin_dir / "ssmcp"), ("ssmcpd", args.bin_dir / "ssmcpd"), ("vt_snapshot", decoder))},

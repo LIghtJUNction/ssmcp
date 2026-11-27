@@ -12,11 +12,7 @@ selected=
 while [ "$remaining" -gt 0 ]; do
     argument=$1; shift; remaining=$((remaining - 1))
     case "$argument" in
-        --allow)
-            [ "$remaining" -gt 0 ] || fail '--allow requires one username@server.'
-            argument=$1; shift; remaining=$((remaining - 1))
-            case "$argument" in [a-zA-Z]*@?*) ;; *) fail 'Pass one controller as username@server.' ;; esac
-            ;;
+        --allow|--allow=*) fail '--allow was removed. Sign in, then use /allow add USER in the running session.' ;;
         --name|--title|--server|--username|--reconnect-delay|--ui-config|--theme|--log-format|--cwd|--shell|--input|--tty|--context-root|--cpu-limit|--memory-limit)
             [ "$remaining" -gt 0 ] || fail 'A connection option is missing its value.'
             set -- "$@" "$argument" "$1"; shift; remaining=$((remaining - 1))
