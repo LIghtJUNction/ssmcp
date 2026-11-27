@@ -449,7 +449,7 @@ impl Shell {
         .expect("shell workspace is unavailable")
     }
 
-    pub(crate) fn retain_diagnostics_only(&self) {
+    pub(crate) fn configure_control_only(&self) {
         self.events.retain_only();
         #[cfg(target_os = "linux")]
         self.lazy_admission.store(true, Ordering::Release);

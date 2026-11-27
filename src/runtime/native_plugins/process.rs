@@ -111,7 +111,7 @@ impl Process {
     /// startup and no event dispatch into frontend presentation or subscribers.
     pub(crate) fn for_control() -> crate::Result<Arc<Self>> {
         let process = Self::for_discovery()?;
-        process.shell.retain_diagnostics_only();
+        process.shell.configure_control_only();
         Ok(process)
     }
 

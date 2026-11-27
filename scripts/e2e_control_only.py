@@ -88,9 +88,11 @@ def run(h):
         h.check("memory ceiling" in json.dumps(started), "native execution fails closed without resource delegation")
         blockers.append("actual CLI execution and command cleanup require existing delegated cgroup memory admission")
     master, slave = pty.openpty()
+    # Owned absolute test binary and fixture identity are passed as argv, never
+    # through a shell. Escaping argv elements would change the identity itself.
     revoked = subprocess.Popen([str(h.binary_dir / "ssmcp"), "controllers", "revoke", h.origin,
                                 h.identity["provider"], h.identity["subject"]],
-                               stdin=slave, stdout=slave, stderr=slave, env=environment, start_new_session=True)
+                               stdin=slave, stdout=slave, stderr=slave, env=environment, start_new_session=True, shell=False)
     h.processes.append(revoked)
     os.close(slave)
     observed = bytearray()
@@ -140,8 +142,9 @@ def run(h):
             h.check(child.wait(timeout=15) != 0, "relay disconnect exits nonzero without reconnect or replay")
         h.check(not list(Path(isolated["SSMCP_SESSION_HOME"]).iterdir()), label + " leaves no saved session state")
     normal_env = h.client_environment("default-discovery")
+    # The same owned test binary; no shell expansion or externally selected tool.
     normal = subprocess.run([str(h.binary_dir / "ssmcp"), "--list-tools"],
-                            stdin=subprocess.DEVNULL, capture_output=True, env=normal_env, timeout=30)
+                            stdin=subprocess.DEVNULL, capture_output=True, env=normal_env, timeout=30, shell=False)
     h.check(normal.returncode == 0 and any(tool["name"] == "ssmcp.ui.wait"
             for tool in json.loads(normal.stdout)["tools"]), "default offline discovery retains foreground chat tools")
     return blockers
