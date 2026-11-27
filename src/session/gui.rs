@@ -69,7 +69,7 @@ impl Host for LocalHost {
     }
 }
 
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(target_os = "android", all(test, unix)))]
 pub(crate) fn foreground_workbench(
     root: PathBuf,
     origin: String,

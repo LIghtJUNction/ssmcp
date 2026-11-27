@@ -417,6 +417,8 @@ pub struct Shell {
     slots: Arc<Semaphore>,
     reuse: reuse::Cache,
     events: Arc<EventLog>,
+    #[cfg(target_os = "linux")]
+    lazy_admission: std::sync::atomic::AtomicBool,
     observer: Option<Arc<crate::observer::Pool>>,
     interactive_shell: Mutex<Option<InteractiveShell>>,
 }
@@ -447,6 +449,12 @@ impl Shell {
         .expect("shell workspace is unavailable")
     }
 
+    pub(crate) fn configure_control_only(&self) {
+        self.events.retain_only();
+        #[cfg(target_os = "linux")]
+        self.lazy_admission.store(true, Ordering::Release);
+    }
+
     pub fn with_workspace(root: PathBuf, output: Arc<OutputStore>) -> Result<Arc<Self>, String> {
         let root = root
             .canonicalize()
@@ -469,6 +477,8 @@ impl Shell {
             slots: Arc::new(Semaphore::new(MAX_JOBS)),
             reuse: reuse::Cache::default(),
             events,
+            #[cfg(target_os = "linux")]
+            lazy_admission: std::sync::atomic::AtomicBool::new(false),
         }))
     }
     pub fn with_terminal(
@@ -1634,6 +1644,16 @@ impl Shell {
         } else {
             None
         };
+        // Control-only hosts admit only validated, authorized starts. Keep the
+        // synchronous user-manager work off both the transport and native executor.
+        // Cancelling this future never continues into process creation.
+        #[cfg(target_os = "linux")]
+        if self.lazy_admission.load(Ordering::Acquire) {
+            tokio::task::spawn_blocking(crate::session_budget::enter)
+                .await
+                .map_err(|error| format!("command memory admission task failed: {error}"))?
+                .map_err(|error| format!("could not admit command memory ceiling: {error}"))?;
+        }
         if args.mode == Some(Mode::Pty) {
             let id = self.next_job_id();
             if let Some(pool) = &self.observer {

@@ -2580,7 +2580,8 @@ mod tests {
                 .expect("native fixture disconnected")
         }
 
-        let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+        let (broker, _accounts) = Broker::test_with_registered_ssh("https://ssmcp.example".into());
+        let broker = Arc::new(broker);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let routes = router(broker.clone());
@@ -2914,7 +2915,8 @@ mod tests {
             time::timeout,
         };
 
-        let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+        let (broker, _accounts) = Broker::test_with_registered_ssh("https://ssmcp.example".into());
+        let broker = Arc::new(broker);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let routes = router(broker.clone());
@@ -3338,7 +3340,9 @@ mod tests {
             time::timeout,
         };
         for valid in [false, true] {
-            let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+            let (broker, _accounts) =
+                Broker::test_with_registered_ssh("https://ssmcp.example".into());
+            let broker = Arc::new(broker);
             let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
             let base = format!("http://{}", listener.local_addr().unwrap());
             let routes = router(broker.clone());
@@ -3506,7 +3510,8 @@ mod tests {
             time::timeout,
         };
 
-        let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+        let (broker, _accounts) = Broker::test_with_registered_ssh("https://ssmcp.example".into());
+        let broker = Arc::new(broker);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let router = router(broker.clone());

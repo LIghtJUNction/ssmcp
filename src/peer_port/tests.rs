@@ -101,9 +101,18 @@ impl Fixture {
 
     async fn attach(&mut self, config: Config, opted_in: bool) -> String {
         let (server, client) = UnixStream::pair().unwrap();
+        let account = crate::device::test_registration(
+            &self.broker,
+            Identity {
+                provider: "github".into(),
+                subject: "42".into(),
+                login: "alice".into(),
+            },
+        )
+        .await;
         let peer = DevicePeer {
             external_user_id: None,
-            account: None,
+            account: Some(account),
             session_access: true,
             control_attribution: true,
             native_messages: false,

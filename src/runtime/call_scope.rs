@@ -65,7 +65,7 @@ impl ThreadScope {
     }
 }
 
-pub(super) fn connection() -> u64 {
+pub(crate) fn connection() -> u64 {
     NEXT_CONNECTION
         .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .expect("native connection generations exhausted")

@@ -953,6 +953,15 @@ impl Session {
     }
 }
 
+#[cfg(test)]
+pub(crate) struct TestAccountStore(std::path::PathBuf);
+#[cfg(test)]
+impl Drop for TestAccountStore {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 pub struct Broker {
     private_local_host: bool,
     pub(crate) local_chat_disabled: bool,
@@ -1167,6 +1176,53 @@ impl Broker {
             return Some(session.clone());
         }
         None
+    }
+
+    /// Preserve the real Unix peer-credential entry point with an explicitly
+    /// registered account and SSH owner mapping, never anonymous admission.
+    #[cfg(test)]
+    pub(crate) fn test_with_registered_ssh(public_url: String) -> (Self, TestAccountStore) {
+        use std::os::unix::fs::DirBuilderExt;
+        let mut nonce = [0u8; 16];
+        getrandom::fill(&mut nonce).unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "ssmcp-registered-ssh-{}",
+            crate::hex::encode(nonce)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .unwrap();
+        let accounts = directory.join("accounts");
+        {
+            let mut store = crate::portal::store::Store::open(&accounts).unwrap();
+            store
+                .login(&Identity {
+                    provider: "github".into(),
+                    subject: "42".into(),
+                    login: "fixture".into(),
+                })
+                .unwrap();
+        }
+        let mut broker = Self::new(public_url);
+        broker.portal = crate::portal::Portal::open(&accounts).unwrap();
+        // SAFETY: geteuid has no memory preconditions.
+        let user = username(unsafe { libc::geteuid() }).unwrap();
+        broker.configure_management(
+            crate::management::ManagementPolicy::new(
+                Vec::new(),
+                HashMap::from([(user, "42".into())]),
+            )
+            .unwrap(),
+            Arc::new(
+                crate::history::AuditLog::open(
+                    &directory.join("audit"),
+                    crate::history::AuditConfig::default(),
+                )
+                .unwrap(),
+            ),
+        );
+        (broker, TestAccountStore(directory))
     }
 
     #[cfg(test)]

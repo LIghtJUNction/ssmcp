@@ -2,8 +2,8 @@
 """Portable client service acceptance without native installation or a broker.
 
 Runs a real foreground supervisor in a fresh SSMCP_SESSION_HOME. An owned
-loopback HTTP fixture rejects unauthenticated WebSocket handshakes with HTTP
-503 before controller admission. The real CLI uses an explicit fixture account
+loopback HTTP fixture issues a disposable device credential and rejects authenticated
+WebSocket handshakes with HTTP 503 before controller admission. The real CLI uses an explicit fixture account
 target. No browser, external OAuth service, installed service, existing session
 or model account is used.
 
@@ -19,6 +19,8 @@ import concurrent.futures
 import configparser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import hashlib
+import ssl
 import os
 from pathlib import Path
 import plistlib
@@ -66,25 +68,49 @@ class GatewayHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         fixture = self.server.fixture
-        if self.path == "/api/client/connect" and self.headers.get("Authorization") is None:
+        if self.path == "/api/client/connect" and self.headers.get("Authorization") == "Bearer " + fixture.token:
             fixture.record("connect")
             return self.reply(503, {"error": "portable_fixture_unavailable"})
         fixture.record("unexpected_requests")
         self.reply(404, {"error": "fixture_route_not_found"})
 
     def do_POST(self):
-        self.server.fixture.record("unexpected_requests")
+        fixture = self.server.fixture
+        length = int(self.headers.get("Content-Length", "0"))
+        if length > 4096:
+            return self.reply(413, {"error": "fixture_request_too_large"})
+        payload = json.loads(self.rfile.read(length)) if length else {}
+        if self.path == "/api/client/login/start" and payload.get("username") == "portable-fixture" and payload.get("device_only") is True:
+            return self.reply(200, {"user_code": "ABCDE-12345", "device_code": "f" * 64,
+                                    "expires_in": 60, "interval": 1})
+        if self.path == "/api/client/login/poll" and payload.get("device_code") == "f" * 64:
+            return self.reply(200, {"status": "authorized", "device_token": fixture.token,
+                                    "expires_in": 3600, "identity": {"provider": "github",
+                                    "subject": "42", "login": "fixture", "username": "portable-fixture"}})
+        # Older loopback relays legitimately lack installation challenge support.
+        if self.path == "/api/client/device/challenge":
+            return self.reply(404, {"error": "fixture_challenge_not_supported"})
+        fixture.record("unexpected_requests")
         self.reply(404, {"error": "fixture_route_not_found"})
 
 
 class UnavailableGateway:
     def __init__(self):
         self.lock = threading.Lock()
+        self.token = "cd_" + "e" * 64
         self.counts = {"connect": 0, "unexpected_requests": 0}
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), GatewayHandler)
         self.server.daemon_threads = True
         self.server.fixture = self
-        self.origin = f"http://127.0.0.1:{self.server.server_address[1]}"
+        # Existing checked-in trust inputs are test-only and valid for literal loopback.
+        fixtures = Path(__file__).resolve().parents[1] / "tests/fixtures/relay-trust"
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(fixtures / "server.pem", fixtures / "server-key.pem")
+        self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
+        self.origin = f"https://127.0.0.1:{self.server.server_address[1]}"
+        self.ca = fixtures / "ca.pem"
+        public = "".join(line for line in (fixtures / "public-key.pem").read_text().splitlines() if not line.startswith("---"))
+        self.pin = "sha256//" + base64.b64encode(hashlib.sha256(base64.b64decode(public)).digest()).decode()
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
@@ -133,6 +159,12 @@ class Portable:
 
     def prepare_gateway(self):
         self.gateway = UnavailableGateway()
+        self.secrets.append(self.gateway.token)
+        config = Path(self.environment["SSMCP_CLIENT_CONFIG"]).parent
+        (config / "loopback-e2e-ca.pem").write_bytes(self.gateway.ca.read_bytes())
+        (config / "trusted-servers.toml").write_text(f'[[servers]]\nserver = "{self.gateway.origin}"\npins = ["{self.gateway.pin}"]\n')
+        self.cli(["login", f"portable-fixture@{self.gateway.origin}", "--no-browser"])
+        self.check(True, "real CLI authorizes only the owned disposable device account")
 
     def check(self, condition, description):
         if not condition:
@@ -476,7 +508,7 @@ class Portable:
         observed = self.gateway.snapshot()
         self.samples["gateway_requests"] = observed
         self.check(observed["connect"] > 1 and observed["unexpected_requests"] == 0,
-                   "session retries and supervisor restoration reuse the target without login")
+                   "session retries and supervisor restoration reuse the owned credential without another login")
 
     def diagnostics(self):
         for index, log in enumerate(self.manager_logs):
@@ -527,7 +559,7 @@ def main():
         "revision": args.revision, "platform": sys.platform, "status": "failed",
         "scope": "isolated foreground supervisor; installation previews only",
         "transport": "owned loopback account gateway; HTTP 503 before WebSocket upgrade",
-        "account": "explicit passive device target; no login credential",
+        "account": "disposable device credential issued only by the owned loopback fixture",
         "external_oauth": False, "models_started": False,
         "checks": [], "samples": {},
     }

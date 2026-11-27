@@ -13,6 +13,7 @@ on:
       - 'src/runtime.rs'
       - 'src/registry.rs'
       - 'scripts/e2e_service_portable.py'
+      - 'scripts/e2e_control_only.py'
       - '.github/workflows/session-service.yml'
       - 'Cargo.toml'
       - 'Cargo.lock'
@@ -119,9 +120,24 @@ jobs:
         if: runner.os != 'Linux'
       - run: "cargo test --locked --lib client::protocol_tests -- --test-threads=4"
         if: runner.os != 'Linux'
+      - run: "cargo test --locked --lib client::control_only::tests -- --test-threads=4"
+        if: runner.os != 'Linux'
       - run: cargo build --locked --bin ssmcp
+      - name: Build the debug CLI with its private loopback CA input
+        run: cargo build --locked --features e2e-loopback-ca --bin ssmcp
       - name: Exercise private native session lifecycle
         run: python scripts/e2e_service_portable.py --bin-dir target/debug --report target/acceptance/session-service.json --revision "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}"
+      - name: Exercise passive control through the real CLI with delegated limits
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          # prepare already ran the kernel CPU/memory/swap/delegation probe.
+          bash scripts/ci_user_manager.sh probe
+          fixture="$(cargo test --locked --lib --no-run --message-format=json | python3 -c 'import json,sys; print(next(m["executable"] for m in map(json.loads,sys.stdin) if m.get("reason")=="compiler-artifact" and m.get("profile",{}).get("test") and m.get("executable")))')"
+          export SSMCP_E2E_FIXTURE_BINARY="$(realpath "$fixture")"
+          python3 scripts/e2e_control_only.py --bin-dir target/debug --require-execution \
+            --report target/acceptance/control-only.json \
+            --revision "${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}"
       - name: Preserve lifecycle evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

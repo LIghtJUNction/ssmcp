@@ -43,6 +43,19 @@ fn identity(subject: &str) -> Identity {
 }
 fn configure(temp: &Temp, owners: HashMap<String, String>) -> Broker {
     let mut broker = Broker::new("https://example.test".into());
+    let accounts = temp.0.join("accounts");
+    {
+        let mut store = crate::portal::store::Store::open(&accounts).unwrap();
+        // Dashboard traffic state, like SSH admission, belongs to registered accounts.
+        for subject in owners
+            .values()
+            .map(String::as_str)
+            .chain(["123", "321", "456", "789", "999"])
+        {
+            store.login(&identity(subject)).unwrap();
+        }
+    }
+    broker.portal = crate::portal::Portal::open(&accounts).unwrap();
     broker.configure_management(
         ManagementPolicy::new(vec!["999".into()], owners).unwrap(),
         Arc::new(AuditLog::open(&temp.0.join("audit"), AuditConfig::default()).unwrap()),
@@ -510,7 +523,17 @@ async fn completion_audit_failure_reports_uncertain_execution_and_preserves_inte
 #[tokio::test]
 async fn failed_connect_audit_never_sends_ready_or_leaves_a_registered_session() {
     let temp = Temp::new();
-    let broker = small_journal(&temp);
+    let mut broker = small_journal(&temp);
+    broker.portal = crate::portal::Portal::open(&temp.0.join("accounts")).unwrap();
+    broker.identities = crate::identity::IdentityProviders::with_github_test_endpoints(
+        &broker.public_url,
+        crate::identity::GitHubConfig {
+            client_id: "fixture".into(),
+            client_secret: "fixture".into(),
+        },
+        "http://127.0.0.1:9",
+    )
+    .unwrap();
     broker
         .management
         .as_ref()
@@ -521,7 +544,12 @@ async fn failed_connect_audit_never_sends_ready_or_leaves_a_registered_session()
     fail_next_compaction(&temp);
     let broker = Arc::new(broker);
     let (server, client) = UnixStream::pair().unwrap();
-    let task = tokio::spawn(broker.clone().attach(server));
+    let registration = crate::device::test_registration(&broker, identity("123")).await;
+    let task = tokio::spawn(broker.clone().attach_device(
+        server,
+        registration.into(),
+        Default::default(),
+    ));
     let (reader, mut writer) = client.into_split();
     let mut reader = BufReader::new(reader);
     wire::write_frame(

@@ -1263,15 +1263,48 @@ mod tests {
         task: tokio::task::JoinHandle<()>,
         attachment: tokio::task::JoinHandle<crate::Result<()>>,
         _broker: Arc<Broker>,
+        directory: std::path::PathBuf,
     }
 
     impl WirePeer {
         async fn start() -> Self {
             use crate::wire::{self, ClientMetadata, Frame, Mode};
             use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-            let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+            let directory = std::env::temp_dir().join(format!(
+                "ssmcp-bridge-auth-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let mut broker = Broker::new("https://ssmcp.example".into());
+            broker.portal = crate::portal::Portal::open(&directory).unwrap();
+            broker.identities = crate::identity::IdentityProviders::with_github_test_endpoints(
+                &broker.public_url,
+                crate::identity::GitHubConfig {
+                    client_id: "fixture".into(),
+                    client_secret: "fixture".into(),
+                },
+                "http://127.0.0.1:9",
+            )
+            .unwrap();
+            let broker = Arc::new(broker);
+            let registration = crate::device::test_registration(
+                &broker,
+                crate::identity::Identity {
+                    provider: "github".into(),
+                    subject: "42".into(),
+                    login: "fixture".into(),
+                },
+            )
+            .await;
             let (server, client) = tokio::net::UnixStream::pair().unwrap();
-            let attachment = tokio::spawn(broker.clone().attach(server));
+            let attachment = tokio::spawn(broker.clone().attach_device(
+                server,
+                registration.into(),
+                Default::default(),
+            ));
             let (reader, mut writer) = client.into_split();
             let mut reader = tokio::io::BufReader::new(reader);
             wire::write_frame(
@@ -1290,12 +1323,22 @@ mod tests {
             )
             .await
             .unwrap();
-            let Some(Frame::Ready { url, .. }) = wire::read_frame(&mut reader).await.unwrap()
+            let Some(Frame::Ready { client_id, .. }) = wire::read_frame(&mut reader).await.unwrap()
             else {
                 panic!("fixture did not register");
             };
-            let user = url.rsplit('/').next().unwrap();
-            let session = broker.online_session(user).await.unwrap();
+            let session = broker
+                .client(
+                    crate::broker::IDENTITY_RESOURCE,
+                    &crate::broker::Authorization::Identity(crate::identity::Identity {
+                        provider: "github".into(),
+                        subject: "42".into(),
+                        login: "fixture".into(),
+                    }),
+                    &client_id,
+                )
+                .await
+                .unwrap();
             let held = Arc::new(AtomicUsize::new(0));
             let release = Arc::new(Semaphore::new(0));
             let reject_close = Arc::new(AtomicBool::new(false));
@@ -1346,6 +1389,7 @@ mod tests {
                 task,
                 attachment,
                 _broker: broker,
+                directory,
             }
         }
         fn remote(&self) -> Remote {
@@ -1362,6 +1406,7 @@ mod tests {
         fn drop(&mut self) {
             self.task.abort();
             self.attachment.abort();
+            let _ = std::fs::remove_dir_all(&self.directory);
         }
     }
 

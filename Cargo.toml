@@ -153,6 +153,8 @@ include = [
     "/scripts/e2e_unified.py",
     "/scripts/test_e2e_unified.py",
     "/scripts/e2e_daemon.py",
+    "/scripts/e2e_control_only.py",
+    "/docs/control-only-daemon.md",
     "/scripts/e2e_dashboard.py",
     "/scripts/e2e_client_ui.py",
     "/scripts/e2e_composer.py",
