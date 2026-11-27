@@ -129,7 +129,7 @@ fn authorize(
     source.validate()?;
     let decision = controller_accounts::observe_verified(server, &source.account, client)
         .map_err(|_| "local controller policy is unavailable")?;
-    if !decision.is_allowed() {
+    if !decision {
         return Err(
             "controller requires local approval; inspect ssmcp controllers on the device".into(),
         );
@@ -215,15 +215,6 @@ pub(super) async fn run(options: &Options) -> crate::Result<()> {
                             let admitted = authorize(server, &ready.3, attribution.as_deref())
                                 .and_then(|()| CallScope::from_relay_for_client(controls.generation,
                                     Some(&ready.3), id, attribution.as_deref(), code_context.as_ref()));
-                            #[cfg(target_os = "linux")]
-                            let admitted = admitted.and_then(|scope| {
-                                    // Preserve normal Linux resource admission, lazily after
-                                    // authorization and before any requested process is created.
-                                    if matches!(&operation, crate::wire::Operation::CallTool { name, .. } if name == "ssmcp.exec.start") {
-                                        crate::session_budget::enter().map_err(|error| format!("could not admit command memory ceiling: {error}"))?;
-                                    }
-                                    Ok(scope)
-                                });
                             match admitted {
                                 Err(error) => send(&mut writer, Frame::Reply { id, result: Err(error) }).await?,
                                 Ok(_) if requests.len() >= MAX_INFLIGHT => send(&mut writer,

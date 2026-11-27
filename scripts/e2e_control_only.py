@@ -37,6 +37,10 @@ def run(h):
     blockers = []
     h.prepare()
     environment = h.client_environment("control-only")
+    # Isolate the actual Linux installer destination, as well as saved sessions.
+    config_home = h.directory / "control-only-config"
+    config_home.mkdir(mode=0o700)
+    environment["XDG_CONFIG_HOME"] = str(config_home)
     command = h.client_command(extra_args=("--no-watchdog", "--daemon", "--control-only"))
     index = command.index("--shell")
     del command[index:index + 2]
@@ -62,6 +66,10 @@ def run(h):
         result = native(h, name)
         h.check(result.get("denied") is True or result.get("isError") is True,
                 "hard-coded unavailable tool is refused: " + name)
+    invalid = native(h, "ssmcp.exec.start", {"command": []})
+    h.check("command must contain" in json.dumps(invalid)
+            and "memory ceiling" not in json.dumps(invalid),
+            "invalid start arguments are rejected before resource admission")
     pid = None
     started = native(h, "ssmcp.exec.start", {"command": ["/bin/sh", "-c", "printf CONTROL_ONLY_OK"], "timeout_ms": 5000})
     if "job_id" in started:
@@ -114,6 +122,8 @@ def run(h):
         wait_for(lambda: not Path(f"/proc/{pid}").exists(), description="owned command cleanup", timeout=10)
         h.check(True, "owned command was reaped on shutdown")
     h.check(not list(Path(environment["SSMCP_SESSION_HOME"]).iterdir()), "no saved session or service definition is created")
+    h.check(not list(config_home.rglob("*")),
+            "no persistent service definition or enablement registration in isolated XDG config")
     h.check(not h.external_invocations("control-only"), "no agent executable was invoked")
     log = (h.directory / "control-only.log").read_bytes()
     h.check(b"\x1b[" not in log, "no TUI or ANSI dashboard output")
