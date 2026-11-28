@@ -98,7 +98,8 @@ jobs:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    # Native acceptance and the final optimized installation build share this job.
+    timeout-minutes: 45
     # Omit debug symbols while retaining the existing dev/test assertions and gates.
     env:
       CARGO_PROFILE_DEV_DEBUG: "0"
