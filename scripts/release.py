@@ -96,10 +96,8 @@ def project_z_url(package):
     return f"https://github.com/LIghtJUNction/{PROJECT_Z_REPOS[package]}.git"
 
 
-def require_project_z_git(name, spec, package, *, upstream=False):
-    allowed = {"package", "git", "default-features", "features", "optional"}
-    if upstream:
-        allowed.add("version")
+def require_project_z_git(name, spec, package):
+    allowed = {"package", "git", "version", "default-features", "features", "optional"}
     if (not isinstance(spec, dict) or spec.get("package", name) != package
             or spec.get("git") != project_z_url(package)
             or set(spec) - allowed
@@ -107,6 +105,13 @@ def require_project_z_git(name, spec, package, *, upstream=False):
             or not isinstance(spec.get("features", []), list)
             or any(not isinstance(feature, str) for feature in spec.get("features", []))):
         raise ValueError(f"{name} must use canonical default-branch Git source {project_z_url(package)}")
+
+
+def require_locked_version(name, spec, locked):
+    pinned = "=" + locked
+    if "version" in spec and spec["version"] != pinned:
+        raise ValueError(f"{name} manifest version must equal the locked exact version {pinned}")
+    return pinned
 
 
 def package_version(manifest, workspace):
@@ -159,6 +164,7 @@ def development_dependencies(root=None, *, modules=None):
                 or project_z_revision(package_name, row.get("source")) != module["commit"]):
             raise ValueError(f"{name} source, gitlink and locked dependency version/commit differ")
         version_key(release_version)
+        require_locked_version(name, dependency, release_version)
         if name == "ztuio" and local.get("lib", {}).get("name", name) != name:
             raise ValueError("the ztuio package must expose the ztuio library name")
         if name == "zharness":
@@ -169,7 +175,7 @@ def development_dependencies(root=None, *, modules=None):
                 raise ValueError("zharness requires the same locked zplugin package as ssmcp")
             expected = "=" + locked["zplugin"]["version"]
             if isinstance(declared, dict) and "git" in declared:
-                require_project_z_git("zplugin", declared, "zplugin", upstream=True)
+                require_project_z_git("zplugin", declared, "zplugin")
                 if requirement is not None and requirement != expected:
                     raise ValueError("zharness requires the same locked zplugin version as ssmcp")
             else:
@@ -1251,6 +1257,25 @@ def inline_dependency(text, section, name, edit):
     return text[:header.end()] + changed + body[end:]
 
 
+def registry_dependency_line(text, section, name, spec, locked):
+    pinned = require_locked_version(name, spec, locked)
+    already_pinned = "version" in spec
+    url = re.escape(spec.pop("git"))
+    spec["version"] = pinned
+    selector = rf"""(?<![\w-])git[ \t]*=[ \t]*(?:"{url}"|'{url}')"""
+    if already_pinned:
+        selector = rf"[ \t]*,[ \t]*{selector}|{selector}[ \t]*,[ \t]*"
+    replacement = "" if already_pinned else "version = " + json.dumps(pinned)
+
+    def replace_source(line):
+        line, count = re.subn(selector, replacement, line)
+        if count != 1:
+            raise ValueError(f"cannot identify the Git selector for {name}")
+        return line
+
+    return inline_dependency(text, section, name, replace_source)
+
+
 def registry_export_manifest(root):
     """Derive exact registry selectors from verified Git package identities."""
     raw = (root / "Cargo.toml").read_bytes()
@@ -1261,17 +1286,7 @@ def registry_export_manifest(root):
         spec = expected.get("dependencies", {}).get(name)
         if spec is None:
             continue
-        url = spec.pop("git")
-        spec["version"] = "=" + versions[package]
-
-        def replace_source(line):
-            line, count = re.subn(r"(?<![\w-])git[ \t]*=[ \t]*(['\"])" + re.escape(url) + r"\1",
-                                  'version = ' + json.dumps(spec["version"]), line)
-            if count != 1:
-                raise ValueError(f"cannot identify the Git selector for {name}")
-            return line
-
-        text = inline_dependency(text, "dependencies", name, replace_source)
+        text = registry_dependency_line(text, "dependencies", name, spec, versions[package])
     unix = "cfg(unix)"
     zrun = expected.get("target", {}).get(unix, {}).get("dependencies", {}).get("zrun")
     if isinstance(zrun, dict) and "git" in zrun:
@@ -1284,12 +1299,9 @@ def registry_export_manifest(root):
                 or not re.fullmatch(re.escape("git+" + ZRUN_GIT + "#") + SHA.pattern,
                                     choices[0].get("source", ""))):
             raise ValueError("registry export requires one locked Git revision for zrun")
-        pinned = "=" + choices[0]["version"]
-        version_key(choices[0]["version"])
-        del zrun["git"]
-        zrun["version"] = pinned
-        text = inline_dependency(text, "target.'cfg(unix)'.dependencies", "zrun", lambda line:
-                                 re.sub(r'git\s*=\s*"[^"]+"', 'version = ' + json.dumps(pinned), line, count=1))
+        locked = choices[0]["version"]
+        version_key(locked)
+        text = registry_dependency_line(text, "target.'cfg(unix)'.dependencies", "zrun", zrun, locked)
     # Registry consumers cannot use the development-only internal Git overrides.
     overrides = expected.get("patch", {}).get("crates-io", {})
     for name in sorted(overrides.keys() & PROJECT_Z_PATCHES):
@@ -1301,7 +1313,7 @@ def registry_export_manifest(root):
 
 
 def require_project_z_zrun(spec):
-    if spec.get("git") != ZRUN_GIT or set(spec) - {"git", "features", "default-features"}:
+    if spec.get("git") != ZRUN_GIT or set(spec) - {"git", "version", "features", "default-features"}:
         raise ValueError("zrun registry export requires the canonical Git dependency")
 
 

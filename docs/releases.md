@@ -215,7 +215,7 @@ git submodule update --init --recursive
 python3 scripts/release.py validate --build-only
 ```
 
-应用开发使用 Project Z 仓库的 canonical Git URL，manifest 不指定 registry 版本、分支、标签或提交。一次发布使用已提交的 Cargo.lock 和 gitlink，不在各平台重新追踪默认分支。完整 Cargo metadata 校验实际 checkout、包版本、依赖边与启用的 features；ssmcp 与 zharness 必须解析到同一个 zplugin。GitHub 自动生成的源码归档不展开 gitlink；完整源码用递归检出的固定 tag。
+应用开发使用 Project Z 仓库的 canonical Git URL。Manifest 的精确包版本约束须与 Cargo.lock 匹配，Git 来源使用默认分支。各平台使用已提交的 Cargo.lock 和 gitlink 固定发布源码。完整 Cargo metadata 校验实际 checkout、包版本、依赖边和启用的 features。ssmcp 与 zharness 必须解析到同一个 zplugin。请递归检出固定 tag 获取包含子模块的完整源码。
 
 ### 正式发布顺序
 

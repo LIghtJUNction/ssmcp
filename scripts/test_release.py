@@ -1420,8 +1420,6 @@ class ReleaseTests(unittest.TestCase):
             canonical + ', rev = "' + "1" * 40 + '"',
             canonical + ', tag = "v0.1.0"',
             canonical + ', branch = "main"',
-            canonical + ', version = "=0.1.0"',
-            canonical + ', version = "0.1.0"',
             canonical + ', default-features = "true"',
             'path = "crates/ztuio"',
             'registry = "other"',
@@ -1431,6 +1429,32 @@ class ReleaseTests(unittest.TestCase):
                 manifest.write_text(original.replace(canonical, replacement))
                 with self.assertRaisesRegex(ValueError, "canonical default-branch Git source"):
                     release.development_dependencies(self.root)
+
+    def test_exact_git_version_pins_must_match_the_lock_and_export_once(self):
+        self.add_ztuio_dependency()
+        manifest = self.root / "Cargo.toml"
+        canonical = f'git = "{release.project_z_url("ztuio")}"'
+        original = manifest.read_text().replace(canonical, canonical + ', version = "=0.1.0"')
+        original += ('\n[target.\'cfg(unix)\'.dependencies]\n'
+                     f'zrun = {{ version = "=0.1.0-p0.15", git = "{release.ZRUN_GIT}", '
+                     'features = ["process"] }\n')
+        with (self.root / "Cargo.lock").open("a") as lock:
+            lock.write('\n[[package]]\nname = "zrun"\nversion = "0.1.0-p0.15"\n'
+                       f'source = "git+{release.ZRUN_GIT}#{"2"*40}"\n')
+        manifest.write_text(original)
+        self.assertEqual(release.validate_package("v0.5.0", self.root), "0.5.0")
+        export = tomllib.loads(release.registry_export_manifest(self.root).decode())
+        self.assertEqual(export["dependencies"]["ztuio"], {"version": "=0.1.0"})
+        self.assertEqual(export["target"]["cfg(unix)"]["dependencies"]["zrun"],
+                         {"version": "=0.1.0-p0.15", "features": ["process"]})
+        for pin in ("0.1.0", "=0.1.1"):
+            with self.subTest(pin=pin):
+                manifest.write_text(original.replace('"=0.1.0"', f'"{pin}"'))
+                with self.assertRaisesRegex(ValueError, "ztuio manifest version must equal"):
+                    release.validate_package("v0.5.0", self.root)
+        manifest.write_text(original.replace('"=0.1.0-p0.15"', '"=0.1.0-p0.14"'))
+        with self.assertRaisesRegex(ValueError, "zrun manifest version must equal"):
+            release.registry_export_manifest(self.root)
 
     def test_lock_rejects_registry_fallback_and_split_git_sources(self):
         self.add_ztuio_dependency()
