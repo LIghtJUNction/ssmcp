@@ -184,6 +184,27 @@ return await exec.run(clientId, {
 
 返回值包含任务 ID、运行状态、退出码与输出游标。等待时间到期后，任务可以继续运行；使用同一个 ID 读取或取消。大结果保留在有界内存中，通过返回的输出 ID 分页读取；容量不足或内容被裁剪时会明确标记。[命令接口](docs/commands.md) · [编排与输出](docs/session-control.md)
 
+## 仅控制模式
+
+在你愿意开放的工作目录运行以下命令。把 `user@server` 换成你核对过的中继账号。
+
+```sh
+ssmcp user@server --control-only
+```
+
+SSMCP 启动一个系统 Shell 和普通的终端日志。Agent 通过 MCP 执行的命令、输出和退出状态直接显示在终端。Shell 提供给 Agent 的任务 ID 是 `main`，也可以通过 `ssmcp.exec.start` 运行独立命令。此模式关闭聊天、Worker 和外部 Agent 启动。首次连接按浏览器提示确认账号和控制权限，前台按 Ctrl+C 结束。
+
+完成首次授权后，可以交给后台会话管理器运行。
+
+```sh
+ssmcp user@server --control-only --daemon --name control
+ssmcp sessions status control
+ssmcp sessions logs control --lines 50 --pretty
+ssmcp sessions stop control
+```
+
+后台日志取自仍在运行的会话。需要指定 Shell 时可加 `--shell /bin/sh`。[仅控制模式说明](docs/control-only-daemon.md)
+
 ## 一个 Agent 控制多台设备
 
 ### 连接与地址
@@ -626,7 +647,3 @@ cargo run --locked --bin ssmcp -- ui preview
 ---
 
 [MIT License](LICENSE)
-
-
-For an explicit unsupervised native control process without chat or workflows,
-see [control-only daemon mode](docs/control-only-daemon.md).

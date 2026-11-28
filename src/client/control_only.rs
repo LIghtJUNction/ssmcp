@@ -1,5 +1,4 @@
-//! Explicit, unsupervised native control connection. No frontend Runtime,
-//! chat ingress, repository watcher, worker pool or lifecycle workflow exists.
+//! Native Shell and command transcript without the frontend or chat runtime.
 use super::*;
 use crate::{
     registry::Provider,
@@ -41,9 +40,8 @@ struct Controls {
     generation: u64,
 }
 impl Controls {
-    async fn open() -> crate::Result<Self> {
-        // Existing discovery constructor allocates no shell or command process.
-        let process = Backend::for_control()?;
+    async fn open(preference: crate::platform::ShellPreference) -> crate::Result<Self> {
+        let process = Backend::for_discovery()?;
         let result = (|| {
             process.configure_chat(false)?;
             let registry = process.registry.clone();
@@ -65,11 +63,18 @@ impl Controls {
             Ok::<_, String>(host)
         })();
         match result {
-            Ok(host) => Ok(Self {
-                process,
-                host,
-                generation: crate::runtime::call_scope::connection(),
-            }),
+            Ok(host) => {
+                let controls = Self {
+                    process,
+                    host,
+                    generation: crate::runtime::call_scope::connection(),
+                };
+                if let Err(error) = controls.process.terminals().start_main(preference, false) {
+                    controls.shutdown().await;
+                    return Err(error);
+                }
+                Ok(controls)
+            }
             Err(error) => {
                 process.shutdown().await;
                 Err(error.into())
@@ -137,7 +142,37 @@ fn authorize(
     Ok(())
 }
 
-pub(super) async fn run(options: &Options) -> crate::Result<()> {
+pub(super) async fn run(
+    options: &Options,
+    service: Option<&crate::session::Runner>,
+) -> crate::Result<()> {
+    let Some(runner) = service else {
+        return connect(options, None).await;
+    };
+    runner.record("starting", 1, None, None, None)?;
+    let result = async {
+        let _logs = crate::session::attach::serve(runner.directory().to_path_buf(), None).await?;
+        connect(options, Some(runner)).await
+    }
+    .await;
+    match &result {
+        Ok(()) => runner.record("stopped", 1, None, None, None)?,
+        Err(error) => runner.record("disconnected", 1, None, None, Some(&error.to_string()))?,
+    }
+    result
+}
+
+async fn wait_for_service_stop(service: Option<&crate::session::Runner>) {
+    if let Some(runner) = service {
+        while !runner.stop_requested() {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    } else {
+        std::future::pending::<()>().await;
+    }
+}
+
+async fn connect(options: &Options, service: Option<&crate::session::Runner>) -> crate::Result<()> {
     let server = options
         .server
         .as_deref()
@@ -146,18 +181,51 @@ pub(super) async fn run(options: &Options) -> crate::Result<()> {
         .username
         .as_deref()
         .ok_or("control-only requires USERNAME@SERVER")?;
-    account::managed::ensure(username, server, false).await?;
+    let interactive = service.is_none() && std::io::IsTerminal::is_terminal(&io::stdin());
+    account::managed::ensure(username, server, interactive).await?;
+    // As on the regular client, admission must precede starting the shell and
+    // transport children so both inherit the correct session placement.
+    #[cfg(target_os = "linux")]
+    tokio::task::spawn_blocking(crate::session_budget::enter).await??;
+    let preference = crate::platform::ShellPreference::new(
+        Some(
+            options
+                .shell
+                .as_deref()
+                .unwrap_or_else(|| std::path::Path::new("system")),
+        ),
+        options.shell.is_some(),
+    );
+    render::configure(ui::Ui {
+        dashboard: false,
+        color: service.is_none() && !options.no_color,
+        log_format: if service.is_some() {
+            render::LogFormat::Jsonl
+        } else {
+            options
+                .log_format
+                .unwrap_or(render::LogFormat::PrettyVerbose)
+        },
+        timestamps: options.timestamps,
+        activity_interval_secs: 0,
+        ..ui::Ui::default()
+    });
     let mut interrupt = interrupt_signal()?;
     let mut terminate = terminate_signal()?;
     let cancelled = async {
-        tokio::select! { _ = interrupt.recv() => {}, _ = terminate.recv() => {} }
+        tokio::select! {
+            _ = interrupt.recv() => {},
+            _ = terminate.recv() => {},
+            _ = wait_for_service_stop(service) => {},
+        }
     };
     let mut registered = false;
     let executable = reload::installed_program()?;
+    let metadata = options.metadata()?;
     let registration = register_transport(
         TransportKind::Relay,
         Some(server),
-        &options.metadata()?,
+        &metadata,
         &mut registered,
         || {
             let mut command = command(executable, server);
@@ -198,12 +266,23 @@ pub(super) async fn run(options: &Options) -> crate::Result<()> {
         ..
     } = link;
     let outcome = async {
-        let controls = Controls::open().await?;
-        println!("{}", json!({"type":"shell", "mode":"control-only", "client_id":ready.3,
-            "url":ready.0, "chat_enabled":false}));
+        let controls = Controls::open(preference).await?;
+        let record = json!({"type":"shell", "mode":"control-only", "client_id":ready.3,
+            "url":ready.0, "name":metadata.name,"cwd":metadata.cwd,"hostname":metadata.hostname,
+            "title":metadata.title,"chat_enabled":false});
+        if let Some(runner) = service {
+            if let Err(error) = runner.record("connected", 1, None, Some(&record), None) {
+                controls.shutdown().await;
+                return Err(error);
+            }
+        } else {
+            println!("{record}");
+        }
         let mut incoming = Incoming::start(reader, transport_kind);
         let mut requests = tokio::task::JoinSet::new();
         let controls = Arc::new(controls);
+        let service_stop = wait_for_service_stop(service);
+        tokio::pin!(service_stop);
         // Replies are serialized here, so spawned native calls never borrow transport IO.
         let result: crate::Result<()> = async {
             loop {
@@ -211,6 +290,7 @@ pub(super) async fn run(options: &Options) -> crate::Result<()> {
                     biased;
                     _ = interrupt.recv() => return Ok(()),
                     _ = terminate.recv() => return Ok(()),
+                    _ = &mut service_stop => return Ok(()),
                     complete = requests.join_next(), if !requests.is_empty() => {
                         let (id, result) = complete.ok_or("native request disappeared")??;
                         send(&mut writer, Frame::Reply { id, result }).await?;
@@ -288,7 +368,6 @@ mod tests {
             vec!["--session-control"],
             vec!["--watchdog"],
             vec!["--tty", "kitty"],
-            vec!["--shell", "/bin/sh"],
             vec!["--reconnect-delay", "1"],
             vec!["--memory-limit", "512MiB"],
         ] {
@@ -296,7 +375,12 @@ mod tests {
             flags.extend(extra);
             assert!(options(&flags).is_err(), "{flags:?}");
         }
-        assert!(options(&["alice@relay.example", "--control-only"]).is_err());
+        let foreground = options(&["alice@relay.example", "--control-only"]).unwrap();
+        assert!(foreground.control_only && !foreground.daemon);
+        let spec = foreground.session_spec().unwrap();
+        let saved = Options::parse_saved(&spec).unwrap().unwrap();
+        assert!(saved.control_only && !saved.daemon && !saved.watchdog);
+        assert_eq!(saved.chat.input, chat_io::Input::None);
     }
     #[test]
     fn transport_has_only_auth_and_chat_disabled_offers() {
@@ -346,7 +430,13 @@ mod tests {
             );
             return;
         }
-        let controls = Controls::open().await.unwrap();
+        #[cfg(target_os = "linux")]
+        crate::session_budget::enter().unwrap();
+        let controls = Controls::open(crate::platform::ShellPreference::exact(
+            std::path::Path::new("/bin/sh"),
+        ))
+        .await
+        .unwrap();
         let projection = controls.process.observe_exec_projection();
         let page = controls
             .perform(crate::wire::Operation::ListTools { cursor: None })
@@ -382,6 +472,14 @@ mod tests {
             );
         }
         assert_eq!(controls.capabilities().unwrap()["chat_enabled"], false);
+        let shell = controls
+            .perform(crate::wire::Operation::CallTool {
+                name: "ssmcp.exec.status".into(),
+                arguments: json!({"job_id":"main"}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(shell["structuredContent"]["running"], true);
         let job = controls.perform(crate::wire::Operation::CallTool {
             name: "ssmcp.exec.start".into(), arguments: json!({"command":["/bin/sh","-c","printf CONTROL_ONLY_UNIT"],"timeout_ms":5000})
         }).await.unwrap();
@@ -401,10 +499,16 @@ mod tests {
             .await
             .unwrap();
         assert!(output.to_string().contains("CONTROL_ONLY_UNIT"));
-        assert!(
-            projection.try_recv().is_err(),
-            "native events must not reach a presentation subscriber"
-        );
+        let events: Vec<_> = projection.try_iter().map(|(event, _)| event).collect();
+        let start = events
+            .iter()
+            .position(|event| event["job_id"] == job_id && event["type"] == "exec.started")
+            .unwrap();
+        let finish = events
+            .iter()
+            .position(|event| event["job_id"] == job_id && event["type"] == "exec.exited")
+            .unwrap();
+        assert!(start < finish);
         #[cfg(target_os = "linux")]
         let owned_pid = {
             let job = controls

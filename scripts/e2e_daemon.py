@@ -767,6 +767,41 @@ class Daemon(Harness):
         self.cli("remove", peer)
         self.managed.discard(peer)
         self.check(self.cli("list") == [], "removing both owned sessions leaves the test state home empty")
+        self.verify_control_only(primary + "-control")
+
+    def verify_control_only(self, control):
+        self.case = "control-only"
+        self.create(control, watchdog=False, extra_args=("--control-only",))
+        status = self.connected(control)
+        self.check(status["connection"]["mode"] == "control-only"
+                   and status["connection"]["chat_enabled"] is False,
+                   "native manager starts a named shell-only session without chat")
+        self.authenticate(control, status)
+        jobs = self.call("ssmcp.exec.list")["jobs"]
+        self.check([(job["job_id"], job["mode"], job["running"]) for job in jobs]
+                   == [("main", "pty", True)], "control-only starts one real system shell")
+        names = {tool["name"] for tool in self.native_catalog(self.client_id)}
+        self.check("ssmcp.exec.start" in names and "ssmcp.ui.wait" not in names,
+                   "background control-only advertises execution without chat tools")
+        self.call("ssmcp.exec.write", {"job_id": "main", "data": "printf '%s%s\\n' CONTROL_ SHELL\n"})
+        wait_for(lambda: "CONTROL_SHELL" in self.call("ssmcp.exec.read", {"job_id": "main"})["stdout"],
+                 description="output from the control-only shell")
+        command = ["/bin/sh", "-c", "printf '%s%s\\n' CONTROL_ JOB"]
+        job = self.call("ssmcp.exec.start", {"command": command})
+        finished = self.call("ssmcp.exec.wait", {"job_id": job["job_id"], "wait_ms": 5000})
+        self.check(finished["exit_code"] == 0, "a separate agent command exits normally")
+        def read_transcript():
+            _, transcript, _ = self.command(["sessions", "logs", control, "--pretty"])
+            return transcript if all(marker in transcript for marker in (
+                b"CONTROL_SHELL", b"CONTROL_JOB", b"printf", b"exit=0")) else None
+
+        transcript = wait_for(read_transcript, description="readable background command transcript")
+        self.check(b"\x1b" not in transcript,
+                   "the readable background transcript shows shell output, the command and its final status")
+        self.cli("stop", control)
+        self.assert_live_logs_unavailable(control)
+        self.cli("remove", control)
+        self.managed.discard(control)
 
     def cleanup_sessions(self):
         for name in list(self.managed):

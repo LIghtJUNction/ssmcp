@@ -363,7 +363,7 @@ pub(crate) async fn list_command(args: &[OsString]) -> Result<()> {
 const SESSIONS_HELP: &str = r#"Usage: ssmcp sessions [list] [--json]
        ssmcp sessions create NAME [options] USERNAME@SERVER
        ssmcp sessions <status|start|stop|close|restart|auth|remove> NAME [--json]
-       ssmcp sessions logs NAME [--lines N] [--json]
+       ssmcp sessions logs NAME [--lines N] [--pretty|--json]
 
   list     List this OS user's local foreground and saved sessions
   create   Start a saved session through the running manager; see ssmcp sessions create --help
@@ -372,7 +372,7 @@ const SESSIONS_HELP: &str = r#"Usage: ssmcp sessions [list] [--json]
   stop     Stop the session and its watchdog while keeping the definition
   close    Alias for stop
   restart  Stop and start the session with its saved configuration and executable
-  logs     Read recent live events as JSONL (50 by default, 1–1000)
+  logs     Read recent live events (50 by default, 1–1000); use --pretty for a transcript
   auth     Show private connection authorization details as JSON
   remove   Stop the session and delete its saved definition
 
@@ -410,18 +410,35 @@ pub async fn manage(mut args: Vec<OsString>) -> Result<()> {
     )?;
     validate_name(name)?;
     if operation == "logs" {
-        let lines = match &args[2..] {
+        let mut flags: Vec<_> = args[2..].iter().map(String::as_str).collect();
+        let pretty = if let Some(i) = flags.iter().position(|flag| *flag == "--pretty") {
+            flags.remove(i);
+            if json_output {
+                return Err("--pretty and --json select different log formats".into());
+            }
+            true
+        } else {
+            false
+        };
+        let lines = match flags.as_slice() {
             [] => 50,
-            [flag, value] if flag == "--lines" => value
+            ["--lines", value] => value
                 .parse::<usize>()
                 .ok()
                 .filter(|v| (1..=1000).contains(v))
                 .ok_or("--lines must be between 1 and 1000")?,
-            _ => return Err("usage: ssmcp sessions logs NAME [--lines N] [--json]".into()),
+            _ => {
+                return Err("usage: ssmcp sessions logs NAME [--lines N] [--pretty|--json]".into());
+            }
         };
         let result = logs(name, lines).await?;
         if json_output {
             println!("{}", serde_json::to_string_pretty(&result)?);
+        } else if pretty {
+            let events = result["events"]
+                .as_array()
+                .ok_or("missing session events")?;
+            crate::client::render::write_session_transcript(&mut io::stdout().lock(), events)?;
         } else {
             if let Some(events) = result["events"].as_array() {
                 for event in events {
@@ -870,6 +887,8 @@ fn public_connection(value: &Value) -> Value {
         "title",
         "cwd",
         "connected_at",
+        "mode",
+        "chat_enabled",
     ] {
         if let Some(value) = value
             .get(key)

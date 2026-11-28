@@ -41,9 +41,7 @@ def run(h):
     config_home = h.directory / "control-only-config"
     config_home.mkdir(mode=0o700)
     environment["XDG_CONFIG_HOME"] = str(config_home)
-    command = h.client_command(extra_args=("--no-watchdog", "--daemon", "--control-only"))
-    index = command.index("--shell")
-    del command[index:index + 2]
+    command = h.client_command(extra_args=("--no-watchdog", "--control-only"))
     process = h.spawn("control-only", command, stdout=subprocess.PIPE, cwd=h.directory, env=environment)
     record = h.validate_connection_record(connection(process))
     h.client_id = record["client_id"]
@@ -58,8 +56,12 @@ def run(h):
     h.check(manifest["chat_enabled"] is False and manifest["control_only"] is True
             and "listener" not in manifest and "timing" not in manifest,
             "manifest advertises no chat, lifecycle, subscriptions or timed workflow")
-    h.check(h.call("ssmcp.exec.list")["jobs"] == [],
-            "authorized native control request observes no eagerly started shell or command")
+    jobs = h.call("ssmcp.exec.list")["jobs"]
+    h.check([(job["job_id"], job["mode"], job["running"]) for job in jobs] == [("main", "pty", True)],
+            "only the real system shell is running before the first request")
+    h.call("ssmcp.exec.write", {"job_id": "main", "data": "printf '%s%s\\n' CONTROL_ SHELL\n"})
+    wait_for(lambda: "CONTROL_SHELL" in h.call("ssmcp.exec.read", {"job_id": "main"})["stdout"],
+             description="the real shell executes the authorized input")
     status, _, _ = h.rpc("tools/call", {"name": "list", "arguments": {}}, secret="")
     h.check(status == 401, "unauthenticated HTTP controller is refused")
     for name in ("ssmcp.exec.events", "ssmcp.worker.submit", "ssmcp.ui.wait", "ssmcp.harnesses.load", "terminal.open"):
@@ -129,7 +131,8 @@ def run(h):
     h.check(not h.external_invocations("control-only"), "no agent executable was invoked")
     log = (h.directory / "control-only.log").read_bytes()
     h.check(b"\x1b[" not in log, "no TUI or ANSI dashboard output")
-    h.check(b"CONTROL_ONLY_OK" not in log, "native command output is returned only through control requests, without event presentation")
+    h.check(b"CONTROL_SHELL" in log and b"CONTROL_ONLY_OK" in log and b"exit=0" in log,
+            "the foreground transcript shows shell output, command source and exit status")
     for label, stop in (("interrupt", "signal"), ("disconnect", "relay")):
         isolated = h.client_environment(label)
         child = h.spawn(label, command, stdout=subprocess.PIPE, cwd=h.directory, env=isolated)

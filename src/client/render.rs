@@ -300,6 +300,25 @@ pub(crate) fn event(label: &str, value: &Value) {
     emit_event(label, value, EventOrigin::Native, Default::default());
 }
 
+pub(crate) fn write_session_transcript(out: &mut impl Write, events: &[Value]) -> io::Result<()> {
+    let mut renderer = Renderer::new(false, false, terminal_width());
+    renderer.verbose = true;
+    for frame in events {
+        let label = frame["label"].as_str().unwrap_or("shell");
+        match frame["kind"].as_str() {
+            Some("event") => renderer.event(out, label, &frame["value"] )?,
+            Some("finish") => renderer.finish_group(out, label)?,
+            Some("terminal") => renderer.event(out, label, &json!({
+                "method":"command/exec/outputDelta",
+                "params":{"processId":frame["terminal_id"],"stream":"stdout","deltaBase64":frame["data_base64"]}
+            }))?,
+            _ => {}
+        }
+    }
+    renderer.finish_visible(out)?;
+    out.flush()
+}
+
 pub(crate) fn reserved_control_event(value: &Value) -> bool {
     value["type"]
         .as_str()

@@ -102,7 +102,7 @@ Start
   ssmcp mcp                     Start local MCP for your harness on Linux
   ssmcp mcp install             Register that control endpoint in Codex
   ssmcp alice@relay.example     Make this device available to that account
-  ssmcp --daemon --control-only Run native controls without chat or workflows
+  ssmcp USERNAME@SERVER --control-only Open a shell and show agent commands
   ssmcp list [--json]           List this OS user's saved local sessions
   ssmcp attach NAME             Reopen a running local session
   ssmcp attach NAME --read-only Observe a running local session
@@ -185,7 +185,7 @@ const HELP_FULL: &str = concat!(
        ssmcp overview <show|state|jobs|exec|cancel|command> TARGET [arguments]
        ssmcp sessions list [--json]
        ssmcp sessions <status|start|stop|close|restart|auth|remove> NAME [--json]
-       ssmcp sessions logs NAME [--lines N] [--json]
+       ssmcp sessions logs NAME [--lines N] [--pretty|--json]
        ssmcp sessions create NAME [--cwd DIR] [--json] [connection options] USERNAME@SERVER
        ssmcp attach [list] [--json]
        ssmcp attach [--local] [--read-only] [--] NAME
@@ -216,7 +216,7 @@ const HELP_FULL: &str = concat!(
   --cpu-limit PERCENT  Linux only, with --daemon or sessions create; 100% is one CPU
   --memory-limit SIZE  Linux only, with --daemon or sessions create; e.g. 512MiB
   --session-control    Grant this connection local saved-session management tools
-  --control-only       With --daemon, run an unsupervised native control process
+  --control-only       Open a native shell and show command activity without chat
   --no-watchdog        Disable automatic reconnects (enabled by default)
   --watchdog           Enable automatic reconnects explicitly (compatibility flag)
   --reconnect-delay N  Initial retry delay, 1..=3600 seconds (default 5; bounded exponential backoff)
@@ -1232,12 +1232,10 @@ impl Options {
             return Err("--reconnect-delay cannot be combined with --no-watchdog".into());
         }
         if control_only {
-            if !daemon
-                || worker.is_some()
+            if worker.is_some()
                 || session_control
                 || harness.is_some()
                 || tty.is_some()
-                || shell.is_some()
                 || list_tools
                 || local_mode
                 || !resource_limits.is_empty()
@@ -1246,7 +1244,7 @@ impl Options {
                 || explicit_watchdog == Some(true)
                 || reconnect_delay_secs.is_some()
             {
-                return Err("--control-only requires --daemon and a relay connection; omit worker, chat/agent, harness, shell/TTY, context, session-control, resource limits and reconnect options".into());
+                return Err("--control-only requires a relay connection; omit worker, chat/agent, harness, TTY observer, context, session-control, resource limits and reconnect options".into());
             }
             chat.input = chat_io::Input::None;
             watchdog = false;
@@ -1365,7 +1363,11 @@ impl Options {
         }
         let metadata = self.metadata()?;
         let mut args = vec![OsString::from("--name"), OsString::from(&metadata.name)];
-        args.extend_from_slice(self.chat.arguments());
+        if self.control_only {
+            args.push(OsString::from("--control-only"));
+        } else {
+            args.extend_from_slice(self.chat.arguments());
+        }
         if let Some(worker) = self.worker {
             args.extend([
                 OsString::from("--worker"),
@@ -2592,9 +2594,6 @@ async fn run_with_args(
     {
         return Err("saved background session options do not match its manifest".into());
     }
-    if options.control_only {
-        return control_only::run(&options).await;
-    }
     if options.daemon {
         let result = crate::session::start(options.session_spec()?).await?;
         use std::io::IsTerminal;
@@ -2610,6 +2609,9 @@ async fn run_with_args(
             println!("{result}");
         }
         return Ok(());
+    }
+    if options.control_only {
+        return control_only::run(&options, service.as_ref()).await;
     }
     let metadata_only = options.list_tools
         && options.harness.is_none()

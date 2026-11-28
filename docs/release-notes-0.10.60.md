@@ -5,3 +5,5 @@
 在同一台设备上连接其他控制者，需要在本机显式批准。终端会给出包含实际账号的命令。也可从 `ssmcp controllers list` 核对待批准的账号，在本机运行 `ssmcp controllers approve user@server`，或运行 `ssmcp controllers revoke user@server` 撤销批准。请把 `user@server` 换成你核对过的中继账号。
 
 Web 工作台和 Magisk 模块的首次连接也要求分别确认账号和控制权限。Magisk 页面明确提示远程会话可使用 Android root 权限。
+
+使用 `ssmcp user@server --control-only` 可以启动一个系统 Shell，直接看 Agent 执行的命令、输出和退出状态。加上 `--daemon --name control` 可在后台运行，并用 `ssmcp sessions logs control --pretty` 查看日志。

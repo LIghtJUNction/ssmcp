@@ -406,6 +406,7 @@ impl Registry {
 struct InteractiveShell {
     preference: crate::platform::ShellPreference,
     current: PathBuf,
+    live: bool,
 }
 
 pub struct Shell {
@@ -417,8 +418,6 @@ pub struct Shell {
     slots: Arc<Semaphore>,
     reuse: reuse::Cache,
     events: Arc<EventLog>,
-    #[cfg(target_os = "linux")]
-    lazy_admission: std::sync::atomic::AtomicBool,
     observer: Option<Arc<crate::observer::Pool>>,
     interactive_shell: Mutex<Option<InteractiveShell>>,
 }
@@ -449,12 +448,6 @@ impl Shell {
         .expect("shell workspace is unavailable")
     }
 
-    pub(crate) fn configure_control_only(&self) {
-        self.events.retain_only();
-        #[cfg(target_os = "linux")]
-        self.lazy_admission.store(true, Ordering::Release);
-    }
-
     pub fn with_workspace(root: PathBuf, output: Arc<OutputStore>) -> Result<Arc<Self>, String> {
         let root = root
             .canonicalize()
@@ -477,8 +470,6 @@ impl Shell {
             slots: Arc::new(Semaphore::new(MAX_JOBS)),
             reuse: reuse::Cache::default(),
             events,
-            #[cfg(target_os = "linux")]
-            lazy_admission: std::sync::atomic::AtomicBool::new(false),
         }))
     }
     pub fn with_terminal(
@@ -498,28 +489,38 @@ impl Shell {
         output: Arc<OutputStore>,
     ) -> crate::Result<Arc<Self>> {
         let manager = Self::with_workspace(root, output)?;
+        manager.start_main(preference, true)?;
+        Ok(manager)
+    }
+
+    pub(crate) fn start_main(
+        &self,
+        preference: crate::platform::ShellPreference,
+        live: bool,
+    ) -> crate::Result<()> {
         let (current, job) = preference.select(|shell| {
-            manager.spawn_pty(
+            self.spawn_pty(
                 PtyStart {
                     id: "main".into(),
                     command: interactive_command(shell),
                     title: Some("main".into()),
-                    cwd: manager.root.clone(),
+                    cwd: self.root.clone(),
                     env: crate::platform::launcher_environment(shell),
                     timeout_ms: 0,
                     size: None,
-                    live: true,
+                    live,
                     compatibility_limit: false,
                 },
                 crate::runtime::call_scope::Source::capture(),
             )
         })?;
-        *manager.interactive_shell.lock().unwrap() = Some(InteractiveShell {
+        *self.interactive_shell.lock().unwrap() = Some(InteractiveShell {
             preference,
             current,
+            live,
         });
-        manager.registry().selected = job.id.clone();
-        Ok(manager)
+        self.registry().selected = job.id.clone();
+        Ok(())
     }
 
     fn shell_selection(&self) -> Result<InteractiveShell, String> {
@@ -547,14 +548,12 @@ impl Shell {
     ) -> crate::Result<PathBuf> {
         let (current, ()) = preference.select(|_| Ok(()))?;
         let mut selection = self.interactive_shell.lock().unwrap();
-        if selection.is_none() {
-            return Err("connection has no interactive shell".into());
-        }
+        let active = selection
+            .as_mut()
+            .ok_or("connection has no interactive shell")?;
         persist()?;
-        *selection = Some(InteractiveShell {
-            preference,
-            current: current.clone(),
-        });
+        active.preference = preference;
+        active.current.clone_from(&current);
         Ok(current)
     }
 
@@ -937,7 +936,7 @@ impl Shell {
                             env: crate::platform::launcher_environment(shell),
                             timeout_ms: 0,
                             size: None,
-                            live: true,
+                            live: selection.live,
                             compatibility_limit: true,
                         },
                         creator.clone(),
@@ -1644,18 +1643,14 @@ impl Shell {
         } else {
             None
         };
-        // Control-only hosts admit only validated, authorized starts. Keep the
-        // synchronous user-manager work off both the transport and native executor.
-        // Cancelling this future never continues into process creation.
-        #[cfg(target_os = "linux")]
-        if self.lazy_admission.load(Ordering::Acquire) {
-            tokio::task::spawn_blocking(crate::session_budget::enter)
-                .await
-                .map_err(|error| format!("command memory admission task failed: {error}"))?
-                .map_err(|error| format!("could not admit command memory ceiling: {error}"))?;
-        }
         if args.mode == Some(Mode::Pty) {
             let id = self.next_job_id();
+            let live = self
+                .interactive_shell
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_none_or(|shell| shell.live);
             if let Some(pool) = &self.observer {
                 pool.terminal_begin(&id, &cwd).await?;
             }
@@ -1668,7 +1663,7 @@ impl Shell {
                     env: args.env.unwrap_or_default(),
                     timeout_ms: args.timeout_ms,
                     size: Some((args.rows.unwrap_or(24), args.cols.unwrap_or(80))),
-                    live: true,
+                    live,
                     compatibility_limit: false,
                 },
                 creator,

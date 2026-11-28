@@ -107,14 +107,6 @@ impl Process {
         Self::from_shell(shell, output, observer, harness)
     }
 
-    /// Passive control keeps native command/output state, with no shell at
-    /// startup and no event dispatch into frontend presentation or subscribers.
-    pub(crate) fn for_control() -> crate::Result<Arc<Self>> {
-        let process = Self::for_discovery()?;
-        process.shell.configure_control_only();
-        Ok(process)
-    }
-
     /// Schema discovery needs a registry but no interactive shell process.
     pub(crate) fn for_discovery() -> crate::Result<Arc<Self>> {
         let output = OutputStore::start_connection()?;
