@@ -43,7 +43,7 @@ class MainActivity : Activity() {
         statusLabel = TextView(this).apply { textSize = 15f; maxLines = 2 }
         bar.addView(statusLabel, LinearLayout.LayoutParams(0, -2, 1f))
         settingsButton = Button(this, null, android.R.attr.borderlessButtonStyle).apply {
-            text = "高级设置"
+            text = getString(R.string.advanced_settings)
             setOnClickListener { configure() }
         }
         bar.addView(settingsButton)
@@ -58,10 +58,13 @@ class MainActivity : Activity() {
                     val previous = store.load()
                     openRemote(prefs.getString("origin", previous?.first) ?: "", null, previous)
                 }
-                else -> statusLabel.text = "工作台已停止"
+                else -> statusLabel.text = getString(R.string.workbench_stopped)
             }
-        } catch (_: Exception) { statusLabel.text = "无法恢复启动设置，请重新配置。" }
+        } catch (_: Exception) { statusLabel.text = getString(R.string.restore_settings_failed) }
     }
+
+    private fun describeError(error: Throwable, fallback: Int): String =
+        if (error is WorkbenchError) getString(error.messageResource) else error.message ?: getString(fallback)
 
     private fun dp(value: Int) = (resources.displayMetrics.density * value).toInt()
 
@@ -85,8 +88,8 @@ class MainActivity : Activity() {
         val uri = data?.data
         LocalRuntime.executor.execute {
             val result = runCatching {
-                require(uri?.scheme == "content") { "请选择设备文件选择器提供的配对文件。" }
-                requireNotNull(contentResolver.openInputStream(requireNotNull(uri))) { "无法打开配对文件。" }
+                require(uri?.scheme == "content") { getString(R.string.choose_device_pairing_file) }
+                requireNotNull(contentResolver.openInputStream(requireNotNull(uri))) { getString(R.string.open_pairing_file_failed) }
                     .use { Workbench.readPairing(it) }
             }
             runOnUiThread {
@@ -101,7 +104,7 @@ class MainActivity : Activity() {
     private fun transition(action: () -> Workbench?) {
         val attempt = ++generation
         settingsButton.isEnabled = false
-        statusLabel.text = "正在打开工作台…"
+        statusLabel.text = getString(R.string.opening_workbench)
         LocalRuntime.executor.execute {
             val result = runCatching(action)
             runOnUiThread {
@@ -109,8 +112,8 @@ class MainActivity : Activity() {
                 settingsButton.isEnabled = true
                 result.fold({ page ->
                     if (page != null) replacePage(page)
-                    else { removePage(); statusLabel.text = "工作台已停止" }
-                }, { statusLabel.text = it.message ?: "工作台启动失败，请检查启动设置。" })
+                    else { removePage(); statusLabel.text = getString(R.string.workbench_stopped) }
+                }, { statusLabel.text = describeError(it, R.string.workbench_start_failed) })
             }
         }
     }
@@ -125,12 +128,12 @@ class MainActivity : Activity() {
 
     private fun openRemote(address: String, imported: Workbench?, saved: Pair<String, String>?) {
         val origin = Workbench.at(address).origin
-        require(imported == null || imported.origin == origin) { "配对文件与填写的网关地址不一致。" }
+        require(imported == null || imported.origin == origin) { getString(R.string.pairing_origin_mismatch) }
         val token = imported?.token ?: saved?.takeIf { Workbench.at(it.first).origin == origin }?.second
-        require(token != null && Regex("[0-9a-f]{64}").matches(token)) { "请选择此网关的配对文件。" }
+        require(token != null && Regex("[0-9a-f]{64}").matches(token)) { getString(R.string.choose_gateway_pairing_file) }
         if (imported != null) store.save(origin, token)
         transition {
-            LocalRuntime.stop()
+            LocalRuntime.stop(applicationContext)
             prefs.edit().putString("mode", "remote").putString("origin", origin).apply()
             Workbench(origin, token)
         }
@@ -153,10 +156,10 @@ class MainActivity : Activity() {
         })()""") { state ->
             if (isDestroyed || web !== page) return@evaluateJavascript
             when (state) {
-                "\"creating\"" -> statusLabel.text = "请先核对本次创建的结果，再更改启动设置。"
-                "\"connected\"" -> statusLabel.text = "请先在工作台断开当前会话，再更改启动设置。"
+                "\"creating\"" -> statusLabel.text = getString(R.string.verify_creation_before_settings)
+                "\"connected\"" -> statusLabel.text = getString(R.string.disconnect_before_settings)
                 "\"ready\"" -> showSettings()
-                else -> statusLabel.text = "正在读取工作台状态，请稍后再试。"
+                else -> statusLabel.text = getString(R.string.checking_workbench)
             }
         }
     }
@@ -166,9 +169,9 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), dp(8), dp(24), dp(4))
         }
-        val modes = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
-        val local = RadioButton(this).apply { id = View.generateViewId(); text = "此设备" }
-        val remote = RadioButton(this).apply { id = View.generateViewId(); text = "已有网关（高级）" }
+        val modes = RadioGroup(this).apply { orientation = RadioGroup.VERTICAL }
+        val local = RadioButton(this).apply { id = View.generateViewId(); text = getString(R.string.this_device) }
+        val remote = RadioButton(this).apply { id = View.generateViewId(); text = getString(R.string.existing_gateway) }
         modes.addView(local); modes.addView(remote); layout.addView(modes)
         val previous = runCatching { store.load() }.getOrNull()
         val address = EditText(this).apply {
@@ -179,11 +182,11 @@ class MainActivity : Activity() {
             isSaveEnabled = false
             layout.addView(this)
         }
-        val file = Button(this).apply { text = "选择网关配对文件"; layout.addView(this) }
+        val file = Button(this).apply { text = getString(R.string.select_pairing_file); layout.addView(this) }
         var picked: Workbench? = null
         val hint = TextView(this).apply { setPadding(0, dp(8), 0, dp(4)); layout.addView(this) }
         val forget = Button(this, null, android.R.attr.borderlessButtonStyle).apply {
-            text = "删除已保存的配对"
+            text = getString(R.string.delete_saved_pairing)
             layout.addView(this)
         }
         file.setOnClickListener {
@@ -191,13 +194,13 @@ class MainActivity : Activity() {
                 result.onSuccess { pairing ->
                     val text = address.text.toString().trim()
                     if (text.isNotEmpty() && runCatching { Workbench.at(text).origin }.getOrNull() != pairing.origin) {
-                        hint.text = "配对文件与填写的网关地址不一致。"
+                        hint.text = getString(R.string.pairing_origin_mismatch)
                     } else {
                         picked = pairing
                         address.setText(pairing.origin)
-                        hint.text = "配对文件已就绪。"
+                        hint.text = getString(R.string.pairing_file_ready)
                     }
-                }.onFailure { hint.text = "无法读取配对文件，请选择网关生成的 JSON 文件。" }
+                }.onFailure { hint.text = getString(R.string.pairing_file_unreadable) }
             }
             try {
                 startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
@@ -206,29 +209,29 @@ class MainActivity : Activity() {
                 }, 71)
             } catch (_: Exception) {
                 receivePairingFile = null
-                hint.text = "无法打开设备文件选择器。"
+                hint.text = getString(R.string.file_picker_unavailable)
             }
         }
         var forgotten = false
         forget.setOnClickListener {
             runCatching { store.delete() }.onSuccess { forgotten = true; picked = null; forget.visibility = View.GONE }
-                .onFailure { hint.text = "无法删除配对。" }
+                .onFailure { hint.text = getString(R.string.delete_pairing_failed) }
         }
         modes.setOnCheckedChangeListener { _, checked ->
             val onDevice = checked == local.id
             address.visibility = if (onDevice) View.GONE else View.VISIBLE
             file.visibility = address.visibility
             forget.visibility = if (!onDevice && previous != null && !forgotten) View.VISIBLE else View.GONE
-            hint.text = if (onDevice) "打开本机工作台后，填写用户名和中继地址以创建会话。"
-                else "选择网关生成的配对文件。远端网关使用 HTTPS。"
+            hint.text = if (onDevice) getString(R.string.local_workbench_hint)
+                else getString(R.string.remote_workbench_hint)
         }
         modes.check(if (prefs.getString("mode", "local") == "remote") remote.id else local.id)
-        val dialog = AlertDialog.Builder(this).setTitle("高级设置").setView(ScrollView(this).apply { addView(layout) })
-            .setPositiveButton("打开", null).setNegativeButton("取消", null)
-            .setNeutralButton("停止本机", null).create()
+        val dialog = AlertDialog.Builder(this).setTitle(R.string.advanced_settings).setView(ScrollView(this).apply { addView(layout) })
+            .setPositiveButton(R.string.open_workbench, null).setNegativeButton(R.string.cancel, null)
+            .setNeutralButton(R.string.stop_local, null).create()
         if (getSharedPreferences("command_receipts", MODE_PRIVATE).contains("entries")) {
             layout.addView(Button(this, null, android.R.attr.borderlessButtonStyle).apply {
-                text = "查看旧版操作记录"; setOnClickListener { legacyReceipts() }
+                text = getString(R.string.show_legacy_operations); setOnClickListener { legacyReceipts() }
             })
         }
         dialog.setOnShowListener {
@@ -237,13 +240,13 @@ class MainActivity : Activity() {
                     if (local.isChecked) openLocal()
                     else openRemote(address.text.toString(), picked, if (forgotten) null else previous)
                     dialog.dismiss()
-                } catch (e: Exception) { hint.text = e.message ?: "启动设置无效。" }
+                } catch (e: Exception) { hint.text = describeError(e, R.string.invalid_startup_settings) }
             }
             dialog.getButton(AlertDialog.BUTTON_NEUTRAL).apply {
                 visibility = if (prefs.getString("mode", "local") == "local") View.VISIBLE else View.GONE
                 setOnClickListener {
                     dialog.dismiss()
-                    transition { LocalRuntime.stop(); prefs.edit().putString("mode", "stopped").apply(); null }
+                    transition { LocalRuntime.stop(applicationContext); prefs.edit().putString("mode", "stopped").apply(); null }
                 }
             }
         }
@@ -263,9 +266,9 @@ class MainActivity : Activity() {
                 val state = entry.optString("state").ifEmpty { entry.optString("outcome", "unknown") }
                 "${entry.optString("operation", entry.optString("command"))} · $state\n${entry.getString("id")}$body"
             }
-        }.getOrDefault("旧版操作记录无法读取。")
-        AlertDialog.Builder(this).setTitle("旧版操作记录").setMessage(text.ifEmpty { "没有记录。" })
-            .setPositiveButton("关闭", null).show()
+        }.getOrDefault(getString(R.string.legacy_operations_unreadable))
+        AlertDialog.Builder(this).setTitle(R.string.legacy_operations).setMessage(text.ifEmpty { getString(R.string.no_operations) })
+            .setPositiveButton(R.string.close, null).show()
     }
 
     override fun onPause() { web?.onPause(); super.onPause() }
@@ -274,7 +277,7 @@ class MainActivity : Activity() {
         ++generation
         receivePairingFile = null
         removePage()
-        if (isFinishing) LocalRuntime.executor.submit { LocalRuntime.stop() }
+        if (isFinishing) LocalRuntime.executor.submit { LocalRuntime.stop(applicationContext) }
         super.onDestroy()
     }
 }

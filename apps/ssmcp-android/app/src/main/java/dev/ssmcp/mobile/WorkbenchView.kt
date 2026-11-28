@@ -47,7 +47,7 @@ internal class WorkbenchView(
                     try {
                         activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
                     } catch (_: ActivityNotFoundException) {
-                        failed("请在浏览器中打开中继的 /setup 页面，输入工作台显示的验证码。")
+                        failed(context.getString(R.string.open_relay_setup_in_browser))
                     }
                     return true
                 }
@@ -61,7 +61,7 @@ internal class WorkbenchView(
                 } else {
                     view.visibility = View.INVISIBLE
                     view.stopLoading()
-                    failed("工作台跳转到了其它地址，请核对网关设置。")
+                    failed(context.getString(R.string.unexpected_workbench_origin))
                 }
             }
 
@@ -78,10 +78,10 @@ internal class WorkbenchView(
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) failed("工作台未能加载，请检查网关地址或重新打开。")
+                if (request.isForMainFrame) failed(context.getString(R.string.workbench_load_failed))
             }
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-                if (request.isForMainFrame) failed("工作台返回 HTTP ${response.statusCode}，请检查网关地址。")
+                if (request.isForMainFrame) failed(context.getString(R.string.workbench_http_error, response.statusCode))
             }
         }
         loadUrl(homePage)
@@ -103,7 +103,7 @@ internal class WorkbenchView(
                 }
             }
             if (SystemClock.uptimeMillis() < deadline) postDelayed({ finishPairing(generation, deadline) }, 100)
-            else failed("网关未完成自动配对，请从高级设置重新打开工作台。")
+            else failed(context.getString(R.string.automatic_pairing_failed))
         }
     }
 

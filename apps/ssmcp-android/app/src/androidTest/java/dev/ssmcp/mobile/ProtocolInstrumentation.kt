@@ -169,9 +169,15 @@ class ProtocolInstrumentation : Instrumentation() {
                         && /^live:[0-9a-f]{32}$/.test(document.querySelector('#session-tabs [aria-selected="true"]')?.title)
                         && document.getElementById('connection-label').textContent === 'SSMCP / OBSERVE'
                 """.trimIndent())
-                waitFor(recreated, "event observation", "document.getElementById('observe-button').textContent === '暂停观察'")
+                waitFor(recreated, "event observation", """
+                    document.getElementById('observe-button').textContent ===
+                        (document.documentElement.lang === 'zh-CN' ? '暂停观察' : 'Pause observation')
+                """.trimIndent())
                 js(recreated, "document.getElementById('observe-button').click()")
-                waitFor(recreated, "paused observation", "document.getElementById('observe-button').textContent === '继续观察'")
+                waitFor(recreated, "paused observation", """
+                    document.getElementById('observe-button').textContent ===
+                        (document.documentElement.lang === 'zh-CN' ? '继续观察' : 'Resume observation')
+                """.trimIndent())
                 js(recreated, "document.getElementById('disconnect-button').click()")
                 waitFor(recreated, "verified release", """
                     document.getElementById('connected-actions').hidden && document.getElementById('error-banner').hidden
@@ -187,7 +193,7 @@ class ProtocolInstrumentation : Instrumentation() {
                 }
             } finally {
                 activity?.let { runOnMainSync { it.finishAndRemoveTask() } }
-                LocalRuntime.executor.submit { LocalRuntime.stop() }.get(10, TimeUnit.SECONDS)
+                LocalRuntime.executor.submit { LocalRuntime.stop(targetContext) }.get(10, TimeUnit.SECONDS)
                 prefs.edit().clear().commit()
             }
         }
