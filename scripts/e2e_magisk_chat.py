@@ -189,7 +189,7 @@ def exercise(client, fixture, root):
             connection = opening["connection_id"]
             caps = bridge(connection, "capabilities")
             generation = caps["generation"]
-            assert {cmd["id"] for cmd in caps["body"]["value"]["commands"]} == {"chat.send"}
+            assert {cmd["id"] for cmd in caps["body"]["value"]["commands"]} == {"chat.send", "session.access"}
             assert {res["id"] for res in caps["body"]["value"]["resources"]} == {"runtime", "conversation", "threads", "chat.queue"}
             client_id = state(connection, generation, "runtime")["client_id"]
             until(lambda: state(connection, generation, "threads")["can_send"] is True)

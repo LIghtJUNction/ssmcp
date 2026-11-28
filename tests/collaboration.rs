@@ -4,6 +4,8 @@
 
 #[path = "support/http_client.rs"]
 mod http_client;
+#[path = "support/verified_broker.rs"]
+mod verified_broker;
 
 use serde_json::{Value, json};
 use ssmcp::{
@@ -39,10 +41,13 @@ struct Server {
     question_probes: Arc<Mutex<Vec<String>>>,
     unexpected_native_calls: Arc<Mutex<Vec<Operation>>>,
     rpc_id: AtomicUsize,
+    _accounts: verified_broker::Accounts,
 }
 impl Server {
     async fn start() -> Self {
-        let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+        let mut broker = Broker::new("https://ssmcp.example".into());
+        let accounts = verified_broker::Accounts::configure(&mut broker);
+        let broker = Arc::new(broker);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
         let router = ssmcp::http::router(broker.clone());
@@ -61,6 +66,7 @@ impl Server {
             question_probes: Arc::new(Mutex::new(Vec::new())),
             unexpected_native_calls: Arc::new(Mutex::new(Vec::new())),
             rpc_id: AtomicUsize::new(1),
+            _accounts: accounts,
         }
     }
     async fn attach(&mut self) -> String {

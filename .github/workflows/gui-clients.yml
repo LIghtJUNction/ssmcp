@@ -521,7 +521,7 @@ jobs:
       contents: read
       actions: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     env:
       LIBGL_ALWAYS_SOFTWARE: '1'
       GALLIUM_DRIVER: llvmpipe
@@ -554,7 +554,7 @@ jobs:
           run-id: ${{ inputs.linux_archive_run || github.run_id }}
           github-token: ${{ github.token }}
           path: ${{ runner.temp }}/ssmcp-gui-release
-      - name: Verify and exercise both executables from the release archive
+      - name: Verify both archived executables and exercise independent desktop sessions
         shell: bash
         env:
           SSMCP_DESKTOP_E2E_EVIDENCE: ${{ runner.temp }}/native-session-diagnostics
@@ -580,8 +580,18 @@ jobs:
           script=scripts/e2e_desktop_windows.py
           if [[ -n "$REUSE_ARCHIVE" ]]; then script="acceptance-harness/$script"; fi
           export PYTHONPATH="$GITHUB_WORKSPACE/scripts"
+          "$bundle/ssmcp" --version
+          "$bundle/ssmcp" --help >/dev/null
+          # The distributed sibling CLI never loads the private test CA. For
+          # the synthetic relay only, pair the exact archived desktop with a
+          # same-source debug CLI that trusts the fixture's pinned loopback CA.
+          fixture="$RUNNER_TEMP/ssmcp-desktop-relay-fixture"
+          mkdir -p "$fixture"
+          cargo build --locked --bin ssmcp --features e2e-loopback-ca --target-dir "$fixture/target"
+          install -m 755 "$bundle/ssmcp-desktop" "$fixture/ssmcp-desktop"
+          install -m 755 "$fixture/target/debug/ssmcp" "$fixture/ssmcp"
           xvfb-run --auto-servernum --server-args='-screen 0 1280x900x24 +extension GLX -nolisten tcp' \
-            /usr/bin/python3 "$script" "$bundle/ssmcp-desktop"
+            /usr/bin/python3 "$script" "$fixture/ssmcp-desktop"
       - name: Keep cropped native diagnostics after an acceptance failure
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
@@ -762,8 +772,19 @@ jobs:
           & $cliExecutable --help 2>&1 | Tee-Object -FilePath (Join-Path $evidence 'cli-help.log')
           if ($LASTEXITCODE -ne 0) { throw 'The built Windows CLI did not report its help.' }
           # The shared fixture owns its temporary state and foreground processes.
-          # Service installation is previewed with --dry-run, never applied.
-          & python scripts/e2e_service_portable.py --bin-dir $binaryDirectory --report (Join-Path $evidence 'session-service.json') --revision $env:SOURCE_COMMIT 2>&1 |
+          # It uses a private loopback CA in a debug-only binary. Restore the
+          # verified production CLI before the later archive checks.
+          $fixtureBin = Join-Path $env:RUNNER_TEMP 'ssmcp-portable-fixture'
+          New-Item -ItemType Directory -Force -Path $fixtureBin | Out-Null
+          $packagedCli = Join-Path $env:CARGO_TARGET_DIR 'x86_64-pc-windows-msvc/debug/ssmcp.exe'
+          try {
+            & cargo build --locked --bin ssmcp --features e2e-loopback-ca --target-dir $env:CLI_TARGET_DIR
+            if ($LASTEXITCODE -ne 0) { throw 'The loopback-only fixture CLI failed to build.' }
+            Copy-Item -LiteralPath $cliExecutable -Destination (Join-Path $fixtureBin 'ssmcp.exe')
+          } finally {
+            Copy-Item -LiteralPath $packagedCli -Destination $cliExecutable -Force
+          }
+          & python scripts/e2e_service_portable.py --bin-dir $fixtureBin --report (Join-Path $evidence 'session-service.json') --revision $env:SOURCE_COMMIT 2>&1 |
             Tee-Object -FilePath (Join-Path $evidence 'session-service.log')
           if ($LASTEXITCODE -ne 0) { throw 'Private Windows lifecycle acceptance failed or was blocked; inspect session-service.json.' }
 

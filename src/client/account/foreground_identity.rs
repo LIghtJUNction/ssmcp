@@ -271,7 +271,7 @@ mod tests {
                 id.replace_previous(None).unwrap();
             }
             let root = super::super::state_root().unwrap();
-            fs::write(root.join(&label), public).unwrap();
+            super::super::write_private(&root.join(&label), public.as_bytes()).unwrap();
             if label == "hold" {
                 use std::io::Read;
                 std::io::stdin().read_exact(&mut [0]).unwrap();

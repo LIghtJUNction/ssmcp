@@ -125,10 +125,17 @@ async fn link_metrics_observer_drop_cancels_task_and_releases_owned_socket() {
         while !completion.is_finished() {
             tokio::task::yield_now().await;
         }
+        // A parallel process spawn may briefly inherit the socket until exec
+        // closes it. A full datagram queue does not prove the peer has closed.
+        loop {
+            match reporter.send(&sample(0, 0, 0).encode()) {
+                Err(error) if error.kind() != io::ErrorKind::WouldBlock => break,
+                _ => tokio::time::sleep(Duration::from_millis(5)).await,
+            }
+        }
     })
     .await
     .unwrap();
-    assert!(reporter.send(&sample(0, 0, 0).encode()).is_err());
 }
 
 #[test]

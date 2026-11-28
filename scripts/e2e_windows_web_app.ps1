@@ -75,6 +75,29 @@ function Owned-Core($gateway) {
         Where-Object { $_.ExecutablePath -ieq $core -and $_.CommandLine -match '__frontend-run' })
 }
 
+function Confirm-Account($window) {
+    $root = [Windows.Automation.AutomationElement]::FromHandle($window.handle)
+    $checks = $root.FindAll([Windows.Automation.TreeScope]::Descendants,
+        [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::CheckBox))
+    if ($checks.Count -lt 2) { throw 'The account and control confirmations are missing.' }
+    foreach ($index in @(0, 1)) {
+        $toggle = $checks[$index].GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+        if ($toggle.Current.ToggleState -ne [Windows.Automation.ToggleState]::On) { $toggle.Toggle() }
+    }
+}
+
+function Initialize-FixtureAccount([string]$origin) {
+    $auth = New-Item -ItemType Directory -Path "$fixture/auth"
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetSecurityDescriptorSddlForm("O:${sid}D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;${sid})")
+    Set-Acl -LiteralPath $auth.FullName -AclObject $acl
+    $hash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+        [Text.Encoding]::UTF8.GetBytes("$origin`ndesktop-test"))).ToLowerInvariant()
+    $credential = @{ direct = @{ token = 'cd_' + ('d' * 64); subject = '42'; expires_at = 4102444800 }; invited = $null }
+    $credential | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $auth.FullName "managed-$hash.json") -Encoding utf8NoBOM
+}
+
 function Submit-Loopback($window, [string]$origin) {
     $edit = [Windows.Automation.ControlType]::Edit
     $button = [Windows.Automation.ControlType]::Button
@@ -83,19 +106,21 @@ function Submit-Loopback($window, [string]$origin) {
     (Control $window $edit '用户名').GetCurrentPattern($value).SetValue('desktop-test')
     $address = (Control $window $edit '服务器地址').GetCurrentPattern($value)
     if ($address.Current.Value -cne 'ssmcp.lmm.best') { throw 'Unexpected default relay.' }
+    Confirm-Account $window
     (Control $window $button '连接').GetCurrentPattern($invoke).Invoke()
     $wait = [Diagnostics.Stopwatch]::StartNew()
     do {
         $root = [Windows.Automation.AutomationElement]::FromHandle($window.handle)
         $checks = $root.FindAll([Windows.Automation.TreeScope]::Descendants,
             [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ControlTypeProperty, [Windows.Automation.ControlType]::CheckBox))
-        if ($checks.Count -ge 2) { break }
+        if ($checks.Count -ge 4) { break }
         Start-Sleep -Milliseconds 150
     } until ($wait.Elapsed.TotalSeconds -ge 8)
-    if ($checks.Count -lt 2 -or @(Owned-Core $window.gateway).Count) {
+    if ($checks.Count -lt 4 -or @(Owned-Core $window.gateway).Count) {
         throw 'Hosted connection did not require terms and privacy consent before core launch.'
     }
     $address.SetValue($origin)
+    Confirm-Account $window
     (Control $window $button '连接').GetCurrentPattern($invoke).Invoke()
     $wait.Restart()
     do {
@@ -113,7 +138,8 @@ try {
     Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
     New-Item -ItemType Directory -Path "$fixture/home" -Force | Out-Null
     $relay.Start()
-    $origin = 'http://127.0.0.1:' + $relay.LocalEndpoint.Port
+    $origin = 'https://127.0.0.1:' + $relay.LocalEndpoint.Port
+    Initialize-FixtureAccount $origin
     $first = Open-Workbench $false
     $a = Find-Form $first 0
     $second = Open-Workbench $true

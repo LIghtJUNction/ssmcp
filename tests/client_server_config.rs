@@ -282,7 +282,7 @@ fn server_configuration_is_editable_and_precedence_is_consistent() {
 }
 
 #[test]
-fn explicit_server_overrides_configuration_for_account_and_device_requests() {
+fn explicit_server_overrides_configuration_for_a_public_account_lookup() {
     let home = Home::new();
     home.success(&["config", "set", "server", "https://configured.example"]);
     let server = Server::once("200 OK", json!({"username":"alice-home"}));
@@ -301,17 +301,13 @@ fn explicit_server_overrides_configuration_for_account_and_device_requests() {
     assert!(!request.to_ascii_lowercase().contains("authorization:"));
     assert!(!request.contains(&token));
 
-    // An explicit device target reaches the selected relay anonymously, even when that
-    // origin has a saved login. A protocol rejection stops before tools start.
-    let relay = Server::once(
-        "404 Not Found",
-        json!({"error":"fixture_no_account_clients"}),
-    );
-    home.account(&relay.origin, &token);
-    let allow = format!("alice@{}", relay.origin);
+    // Device startup requires HTTPS even when a public lookup accepts loopback HTTP.
+    let relay = "http://127.0.0.1:1";
+    home.account(relay, &token);
+    let allow = format!("alice@{relay}");
     let output = home.command(&[
         "--server",
-        &relay.origin,
+        relay,
         &allow,
         "--no-watchdog",
         "--no-browser",
@@ -322,17 +318,11 @@ fn explicit_server_overrides_configuration_for_account_and_device_requests() {
     assert!(output.stdout.is_empty());
     let error = String::from_utf8_lossy(&output.stderr);
     assert!(
-        error.contains("server does not support account clients"),
+        error.contains("device authorization requires a named account on an HTTPS origin"),
         "{error}"
     );
     assert!(!error.contains("Starting native tools"), "{error}");
     assert!(!error.contains(&token));
-    let request = relay.request();
-    assert!(request.starts_with("GET /api/client/connect "));
-    assert!(request.to_ascii_lowercase().contains("upgrade: websocket"));
-    assert!(!request.to_ascii_lowercase().contains("authorization:"));
-    assert!(!request.contains(&token));
-
     // Per-command selection leaves the saved configuration untouched.
     assert_eq!(
         home.success(&["config", "get", "server"]).trim(),
@@ -341,7 +331,7 @@ fn explicit_server_overrides_configuration_for_account_and_device_requests() {
 }
 
 #[test]
-fn public_account_lookup_and_named_connections_do_not_use_saved_login() {
+fn public_account_lookup_does_not_use_saved_login() {
     let home = Home::new();
     let server = Server::once("200 OK", json!({"username":"alice-home"}));
     let selected_token = "d".repeat(64);
@@ -364,50 +354,6 @@ fn public_account_lookup_and_named_connections_do_not_use_saved_login() {
     let output = home.command(&["Alice@relay.example", "--register", "--no-browser"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("relay web portal"));
-
-    let named = Server::once("400 Bad Request", json!({"error": "stop_test"}));
-    home.success(&["config", "set", "server", &named.origin]);
-    let output = home.command(&[
-        &format!("Alice@{}", named.origin),
-        "--no-browser",
-        "--no-watchdog",
-    ]);
-    assert!(!output.status.success());
-    let request = named.request();
-    assert!(request.starts_with("GET /api/client/connect "));
-    assert!(!request.to_ascii_lowercase().contains("authorization:"));
-    assert!(!request.contains(&previous_token));
-
-    // The configured origin also controls unsigned named connections. A
-    // different last-login origin must neither override it nor supply a token.
-    let relay = Server::once(
-        "404 Not Found",
-        json!({"error":"fixture_no_account_clients"}),
-    );
-    home.account(&relay.origin, &selected_token);
-    home.account("https://last-login.example", &previous_token);
-    home.success(&["config", "set", "server", &relay.origin]);
-    let output = home.command(&[&format!("alice@{}", relay.origin), "--no-watchdog"]);
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
-    let error = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        error.contains("server does not support account clients"),
-        "{error}"
-    );
-    assert!(!error.contains("Starting native tools"), "{error}");
-    assert!(!error.contains(&selected_token));
-    assert!(!error.contains(&previous_token));
-    assert_eq!(
-        home.success(&["config", "get", "server"]).trim(),
-        relay.origin
-    );
-    let request = relay.request();
-    assert!(request.starts_with("GET /api/client/connect "));
-    assert!(request.to_ascii_lowercase().contains("upgrade: websocket"));
-    assert!(!request.to_ascii_lowercase().contains("authorization:"));
-    assert!(!request.contains(&selected_token));
-    assert!(!request.contains(&previous_token));
 }
 
 #[test]

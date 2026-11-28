@@ -288,11 +288,37 @@ async fn finished(shell: &Shell, job: &Value) -> Value {
     .expect("native background command did not finish")
 }
 
+#[cfg(target_os = "linux")]
+fn native_fixture_child(test: &str) -> bool {
+    const CHILD: &str = "SSMCP_RELEASE_NATIVE_FIXTURE";
+    if std::env::var(CHILD).as_deref() == Ok(test) {
+        ssmcp::enter_session_budget()
+            .expect("admit the native test process before spawning commands");
+        return true;
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", test, "--nocapture"])
+        .env(CHILD, test)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    false
+}
+
 #[tokio::test]
 async fn native_exec_preserves_arguments_environment_cwd_streams_and_exit_code() {
-    let scratch = Scratch::new();
     #[cfg(target_os = "linux")]
-    ssmcp::enter_session_budget().expect("admit the native test process before spawning commands");
+    if !native_fixture_child(
+        "native_exec_preserves_arguments_environment_cwd_streams_and_exit_code",
+    ) {
+        return;
+    }
+    let scratch = Scratch::new();
     let shell =
         Shell::with_workspace(scratch.0.clone(), OutputStore::new_connection().unwrap()).unwrap();
     let job = shell
@@ -336,7 +362,9 @@ async fn native_exec_preserves_arguments_environment_cwd_streams_and_exit_code()
 #[tokio::test]
 async fn native_exec_cancel_stops_a_live_process() {
     #[cfg(target_os = "linux")]
-    ssmcp::enter_session_budget().expect("admit the native test process before spawning commands");
+    if !native_fixture_child("native_exec_cancel_stops_a_live_process") {
+        return;
+    }
     let shell = Shell::new();
     let job = shell
         .call(

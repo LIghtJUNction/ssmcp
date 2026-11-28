@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.SystemClock
+import android.system.Os
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -17,6 +18,7 @@ import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.URI
+import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -137,10 +139,25 @@ class ProtocolInstrumentation : Instrumentation() {
                 } catch (_: SocketTimeoutException) { /* No connection arrived. */ }
 
                 val unusedPort = ServerSocket(0, 1, loopback).use { it.localPort }
+                val relayOrigin = "https://127.0.0.1:$unusedPort"
+                // Only the instrumented app's private files are populated. The production
+                // CLI still requires HTTPS and the local gateway verifies the normal device record.
+                var auth = File(targetContext.filesDir, "home")
+                for (component in listOf(".config", "ssmcp", "auth")) {
+                    auth = File(auth, component)
+                    check(auth.isDirectory || auth.mkdir())
+                    Os.chmod(auth.path, 448) // 0700
+                }
+                val credentialId = MessageDigest.getInstance("SHA-256")
+                    .digest("$relayOrigin\nandroidfixture".toByteArray())
+                    .joinToString("") { "%02x".format(it) }
+                val credential = File(auth, "managed-$credentialId.json")
+                credential.writeText("""{"direct":{"token":"cd_${"a".repeat(64)}","subject":"42","expires_at":4102444800},"invited":null}""")
+                Os.chmod(credential.path, 384) // 0600
                 js(recreated, """
                     document.getElementById('launch-name').value = 'androidfixture';
                     const relay = document.getElementById('launch-relay');
-                    relay.value = 'http://127.0.0.1:$unusedPort';
+                    relay.value = '$relayOrigin';
                     relay.dispatchEvent(new Event('input', { bubbles: true }));
                     document.getElementById('launch-account-confirmed').checked = true;
                     document.getElementById('launch-control-confirmed').checked = true;

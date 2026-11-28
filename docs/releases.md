@@ -46,6 +46,8 @@ Linux 归档包含 `ssmcp-desktop`、`README.md`、`LICENSE` 和 `build-source.j
 
 窗口门证明这个 Release 文件能够创建真实窗口并正常退出；它不验证硬件 GPU、人工视觉交互或连接运行中会话后的命令效果。构建和原始窗口日志保留在 `linux-<source commit>-<run attempt>` Actions artifact 中。平台、profile 和验收范围以对应附件收据为准。
 
+独立会话验收还会核对归档的 CLI 版本和帮助，并使用归档中的桌面程序连接隔离的 HTTPS 测试中继。连接测试搭配同一源码构建的调试 CLI，由它加载测试中继的私有 CA 和公钥 pin。该调试 CLI 只用于验收。
+
 ## 从 crates.io 安装客户端
 
 安装 Rust 工具链后，选择已经在 crates.io 发布的版本。只运行客户端时显式指定 `--bin ssmcp`，避免安装仅用于 Linux 网关的 daemon：

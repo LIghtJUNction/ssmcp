@@ -4,6 +4,8 @@
 
 #[path = "support/http_client.rs"]
 mod http_client;
+#[path = "support/verified_broker.rs"]
+mod verified_broker;
 
 use reqwest::{Client, Response, StatusCode, Url, header};
 use serde_json::{Value, json};
@@ -40,6 +42,7 @@ struct Harness {
     base: String,
     client: Client,
     attachment: Option<Attachment>,
+    _accounts: verified_broker::Accounts,
 }
 
 struct Page {
@@ -62,7 +65,9 @@ impl Harness {
     }
 
     async fn with_oauth_config(config: OAuthConfig) -> Self {
-        let broker = Arc::new(Broker::with_oauth_config(ISSUER.into(), config).unwrap());
+        let mut broker = Broker::with_oauth_config(ISSUER.into(), config).unwrap();
+        let accounts = verified_broker::Accounts::configure(&mut broker);
+        let broker = Arc::new(broker);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let router = http::router(broker.clone());
@@ -80,6 +85,7 @@ impl Harness {
             base,
             client,
             attachment: None,
+            _accounts: accounts,
         };
         harness.connect().await;
         harness

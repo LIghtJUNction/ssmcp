@@ -101,6 +101,7 @@ def run(desktop):
                     x11.close()
 
         try:
+            test.login(test.state)
             first = open_window("first")
             window, = windows()
             assert clients() == {} and not list(registry.glob("frontends/*/live/*/overview.json"))
