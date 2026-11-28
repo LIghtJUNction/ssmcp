@@ -33,6 +33,10 @@ def native(h, name, arguments=None):
     return response.get("structuredContent", response)
 
 
+def with_activity(command):
+    return ["/bin/bash", "-c", 'export SSMCP_SESSION_ACTIVITY_PID=$$; exec "$@"', "ssmcp", *command]
+
+
 def run(h):
     blockers = []
     h.prepare()
@@ -41,8 +45,14 @@ def run(h):
     config_home = h.directory / "control-only-config"
     config_home.mkdir(mode=0o700)
     environment["XDG_CONFIG_HOME"] = str(config_home)
+    activity = h.directory / "calls.json"
+    environment["SSMCP_SESSION_ACTIVITY_PATH"] = str(activity)
+
+    def count():
+        return json.loads(activity.read_text())["tool_calls_10m"] if activity.exists() else None
+
     command = h.client_command(extra_args=("--no-watchdog", "--control-only"))
-    process = h.spawn("control-only", command, stdout=subprocess.PIPE, cwd=h.directory, env=environment)
+    process = h.spawn("control-only", with_activity(command), stdout=subprocess.PIPE, cwd=h.directory, env=environment)
     record = h.validate_connection_record(connection(process))
     h.client_id = record["client_id"]
     h.check(record["mode"] == "control-only" and record["chat_enabled"] is False,
@@ -52,13 +62,19 @@ def run(h):
     h.check("ssmcp.exec.start" in names and all(name == "ssmcp.client.capabilities"
             or (name.startswith("ssmcp.exec.") and not name.endswith("events")) for name in names),
             "catalog contains only native process control and capability reads")
+    wait_for(lambda: count() == 0, description="initial session activity")
+    jobs = h.call("ssmcp.exec.list")["jobs"]
+    h.check([(job["job_id"], job["mode"], job["running"]) for job in jobs] == [("main", "pty", True)],
+            "only the real system shell is running before the first request")
+    # The first code-mode request also performs the authorized capability
+    # probe. Both reach the client as CallTool, and catalog discovery does not.
+    wait_for(lambda: count() == 2, description="capability probe and explicit call after catalog discovery")
+    h.check(count() == 2, "the status snapshot counts admitted native calls and excludes tool listings")
     manifest = native(h, "ssmcp.client.capabilities")
     h.check(manifest["chat_enabled"] is False and manifest["control_only"] is True
             and "listener" not in manifest and "timing" not in manifest,
             "manifest advertises no chat, lifecycle, subscriptions or timed workflow")
-    jobs = h.call("ssmcp.exec.list")["jobs"]
-    h.check([(job["job_id"], job["mode"], job["running"]) for job in jobs] == [("main", "pty", True)],
-            "only the real system shell is running before the first request")
+    wait_for(lambda: count() == 3, description="one more admitted native call")
     h.call("ssmcp.exec.write", {"job_id": "main", "data": "printf '%s%s\\n' CONTROL_ SHELL\n"})
     wait_for(lambda: "CONTROL_SHELL" in h.call("ssmcp.exec.read", {"job_id": "main"})["stdout"],
              description="the real shell executes the authorized input")
@@ -133,13 +149,20 @@ def run(h):
     h.check(b"\x1b[" not in log, "no TUI or ANSI dashboard output")
     h.check(b"CONTROL_SHELL" in log and b"CONTROL_ONLY_OK" in log and b"exit=0" in log,
             "the foreground transcript shows shell output, command source and exit status")
-    for label, stop in (("interrupt", "signal"), ("disconnect", "relay")):
+    for label, stop in (("interrupt", "signal"), ("hangup", "hangup"), ("disconnect", "relay")):
         isolated = h.client_environment(label)
-        child = h.spawn(label, command, stdout=subprocess.PIPE, cwd=h.directory, env=isolated)
+        child_command = command
+        if stop == "hangup":
+            isolated["SSMCP_SESSION_ACTIVITY_PATH"] = str(h.directory / "hangup-calls.json")
+            child_command = with_activity(command)
+        child = h.spawn(label, child_command, stdout=subprocess.PIPE, cwd=h.directory, env=isolated)
         child_record = h.validate_connection_record(connection(child))
         if stop == "signal":
             child.send_signal(signal.SIGINT)
             h.check(child.wait(timeout=15) == 0, "SIGINT exits cleanly")
+        elif stop == "hangup":
+            child.send_signal(signal.SIGHUP)
+            h.check(child.wait(timeout=15) == 0, "terminal hangup closes the foreground session cleanly")
         else:
             h.account_gateway.disconnect_client(child_record["client_id"])
             h.check(child.wait(timeout=15) != 0, "relay disconnect exits nonzero without reconnect or replay")

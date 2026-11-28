@@ -1,0 +1,19 @@
+{
+  "cwd": "工作目录",
+  "command": "启动命令",
+  "save": "保存",
+  "open": "打开终端",
+  "collapse": "折叠",
+  "close": "关闭会话",
+  "closing": "正在关闭会话…",
+  "configureHint": "配置 SSMCP 会话",
+  "openHint": "打开 SSMCP · 右键设置",
+  "waiting": "SSMCP · 正在等待会话统计",
+  "count": "最近 10 分钟调用工具 %1 次 · 右键设置",
+  "setupHelp": "填写你的用户名和服务器，保存后即可启动会话。",
+  "nextLaunch": "保存的修改会在下次打开终端时生效。",
+  "saveError": "Omarchy 无法保存设置。",
+  "terminalError": "无法加载内嵌终端，请安装 qmltermwidget。",
+  "runtimeError": "无法创建私有运行目录。",
+  "ended": "SSMCP 会话已结束。"
+}

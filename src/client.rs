@@ -21,6 +21,8 @@ mod environment;
 mod frontend;
 #[cfg(target_os = "android")]
 mod magisk;
+#[cfg(target_os = "linux")]
+mod session_activity;
 
 #[cfg(test)]
 mod account_compat_tests;
@@ -518,6 +520,8 @@ impl Drop for Incoming {
 struct Options {
     #[cfg(target_os = "linux")]
     local: Option<local::Settings>,
+    #[cfg(target_os = "linux")]
+    activity: Option<session_activity::Activity>,
     destination: Option<String>,
     server: Option<String>,
     username: Option<String>,
@@ -555,6 +559,15 @@ struct Options {
 }
 
 impl Options {
+    fn termination_signal(&self) -> io::Result<crate::platform::Signal> {
+        let signal = terminate_signal()?;
+        #[cfg(target_os = "linux")]
+        if self.activity.is_some() {
+            return signal.with_hangup();
+        }
+        Ok(signal)
+    }
+
     fn terminal_frontend(&self) -> bool {
         !self.frontend_owned && self.chat.input == chat_io::Input::Terminal
     }
@@ -1258,6 +1271,8 @@ impl Options {
         Ok(Some(Self {
             #[cfg(target_os = "linux")]
             local,
+            #[cfg(target_os = "linux")]
+            activity: None,
             destination,
             server,
             username,
@@ -2357,6 +2372,8 @@ async fn run_with_args(
     mut args: Vec<OsString>,
     frontend_instance: Option<String>,
 ) -> crate::Result<()> {
+    #[cfg(target_os = "linux")]
+    let activity_path = session_activity::owner_path();
     #[cfg(target_os = "android")]
     if args.first().is_some_and(|arg| arg == "__android_app") {
         args.remove(0);
@@ -2525,6 +2542,10 @@ async fn run_with_args(
     }
     if frontend_instance.is_none() && !args.first().is_some_and(|arg| arg == "__session-run") {
         match frontend::parse(&mut args)? {
+            #[cfg(target_os = "linux")]
+            frontend::Launch::Desktop(_) | frontend::Launch::Web(_) if activity_path.is_some() => {
+                return Err("the Omarchy widget requires a foreground terminal session".into());
+            }
             frontend::Launch::Desktop(target) => return frontend::desktop(target).await,
             frontend::Launch::Web(target) => {
                 return crate::session::gui::launch(target.as_deref()).await;
@@ -2561,6 +2582,13 @@ async fn run_with_args(
     let Some(mut options) = parsed else {
         return Ok(());
     };
+    #[cfg(target_os = "linux")]
+    if let Some(path) = activity_path {
+        if service.is_some() || options.daemon {
+            return Err("the Omarchy widget requires a foreground terminal session".into());
+        }
+        options.activity = Some(session_activity::Activity::start(path));
+    }
     options.frontend_owned = frontend_instance.is_some();
     options
         .resource_limits
@@ -2726,7 +2754,7 @@ async fn run_with_args(
         None
     };
     let mut interrupt = interrupt_signal()?;
-    let mut terminate = terminate_signal()?;
+    let mut terminate = options.termination_signal()?;
     if options.list_tools {
         let management = session_control(&options, service.as_ref())?;
         let startup = async {
@@ -3744,7 +3772,7 @@ async fn connect_inner(
     let management = session_control(options, service)?;
     let mut interrupt = interrupt_signal()?;
     let mut terminate = {
-        let signal = terminate_signal()?;
+        let signal = options.termination_signal()?;
         #[cfg(all(test, unix))]
         {
             output_expiry_fixture::StopSignal::new(signal)
@@ -4451,6 +4479,8 @@ async fn connect_inner(
                         Err(error) => break Err(error.into()),
                     };
                     if reload::is_reload(&operation) {
+                        #[cfg(target_os = "linux")]
+                        if !maintenance && let Some(activity) = &options.activity { activity.record(&operation); }
                         let _controller = render::controller_started(id, controller.as_ref(), attribution.as_deref(), &operation);
                         let crate::wire::Operation::CallTool { arguments, .. } = &operation else { unreachable!() };
                         let mut response = if options.temporary {
@@ -4514,6 +4544,8 @@ async fn connect_inner(
                         continue;
                     }
                     if requests.len() >= MAX_INFLIGHT { break Err("server exceeded the in-flight request limit".into()); }
+                    #[cfg(target_os = "linux")]
+                    if !maintenance && let Some(activity) = &options.activity { activity.record(&operation); }
                     let backend = backend.clone();
                     let writer = writer.clone();
                     let peers = peer_ports.clone();

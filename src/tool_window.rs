@@ -1,4 +1,4 @@
-//! Per-membership observations admitted by the relay's public tool entries.
+//! Rolling tool-call observations for a session or collaboration member.
 use std::{collections::VecDeque, time::Duration};
 use tokio::time::Instant;
 
@@ -60,14 +60,14 @@ impl Second {
     }
 }
 
-pub(super) struct ToolWindow {
+pub(crate) struct ToolWindow {
     started: Instant,
     last_call: Option<Instant>,
     seconds: VecDeque<Second>,
 }
 
 impl ToolWindow {
-    pub(super) fn new(started: Instant) -> Self {
+    pub(crate) fn new(started: Instant) -> Self {
         Self {
             started,
             last_call: None,
@@ -79,7 +79,7 @@ impl ToolWindow {
         u64::try_from(now.saturating_duration_since(self.started).as_millis()).unwrap_or(u64::MAX)
     }
 
-    pub(super) fn record(&mut self, now: Instant) {
+    pub(crate) fn record(&mut self, now: Instant) {
         let at = self.elapsed_ms(now);
         self.last_call = Some(now);
         let index = at / 1000;
@@ -103,7 +103,7 @@ impl ToolWindow {
             .record((at % 1000) as u16);
     }
 
-    pub(super) fn measure(&self, now: Instant) -> (u64, bool) {
+    pub(crate) fn measure(&self, now: Instant) -> (u64, bool) {
         let lower = self.elapsed_ms(now).checked_sub(WINDOW_MS);
         let mut count = 0;
         for second in self.seconds.iter().rev() {
@@ -124,7 +124,7 @@ impl ToolWindow {
         )
     }
 
-    pub(super) fn calls_per_minute(&self, now: Instant) -> [u64; 10] {
+    pub(crate) fn calls_per_minute(&self, now: Instant) -> [u64; 10] {
         const MINUTE_MS: u64 = 60_000;
 
         let elapsed = self.elapsed_ms(now);

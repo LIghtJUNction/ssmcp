@@ -8,7 +8,10 @@ mod shell;
 pub(crate) use shell::{ShellPreference, launcher_environment};
 
 #[cfg(unix)]
-pub struct Signal(tokio::signal::unix::Signal);
+pub struct Signal(
+    tokio::signal::unix::Signal,
+    #[cfg(target_os = "linux")] Option<tokio::signal::unix::Signal>,
+);
 #[cfg(windows)]
 pub enum Signal {
     Interrupt(tokio::signal::windows::CtrlC),
@@ -16,7 +19,32 @@ pub enum Signal {
 }
 
 impl Signal {
+    #[cfg(unix)]
+    fn unix(kind: tokio::signal::unix::SignalKind) -> io::Result<Self> {
+        Ok(Self(
+            tokio::signal::unix::signal(kind)?,
+            #[cfg(target_os = "linux")]
+            None,
+        ))
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_hangup(mut self) -> io::Result<Self> {
+        self.1 = Some(tokio::signal::unix::signal(
+            tokio::signal::unix::SignalKind::hangup(),
+        )?);
+        Ok(self)
+    }
+
     pub async fn recv(&mut self) {
+        #[cfg(target_os = "linux")]
+        if let Some(hangup) = &mut self.1 {
+            tokio::select! {
+                _ = self.0.recv() => {},
+                _ = hangup.recv() => {},
+            }
+            return;
+        }
         #[cfg(unix)]
         {
             self.0.recv().await;
@@ -36,7 +64,7 @@ impl Signal {
 pub fn interrupt_signal() -> io::Result<Signal> {
     #[cfg(unix)]
     {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).map(Signal)
+        Signal::unix(tokio::signal::unix::SignalKind::interrupt())
     }
     #[cfg(windows)]
     {
@@ -47,7 +75,7 @@ pub fn interrupt_signal() -> io::Result<Signal> {
 pub fn terminate_signal() -> io::Result<Signal> {
     #[cfg(unix)]
     {
-        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map(Signal)
+        Signal::unix(tokio::signal::unix::SignalKind::terminate())
     }
     #[cfg(windows)]
     {

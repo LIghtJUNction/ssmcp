@@ -39,6 +39,8 @@ cargo install ssmcp --locked --bin ssmcp
 
 Linux 和 macOS 是首要支持平台。Windows、Android 和桌面版的安装方式见[平台与发布说明](docs/releases.md)。
 
+在 Omarchy 上，[SSMCP 状态栏插件](packaging/omarchy/README.md)内嵌了可折叠的会话终端，并显示最近 10 分钟的工具调用次数。
+
 ### 连接项目
 
 在项目目录运行以下命令，将 `alice` 替换为你的中继用户名。加上 `--webui` 即可打开浏览器工作台。

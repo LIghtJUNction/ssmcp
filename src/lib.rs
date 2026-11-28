@@ -59,6 +59,8 @@ pub use session_budget::enter as enter_session_budget;
 mod steering;
 pub mod terminals;
 pub(crate) mod tool_repository;
+#[cfg(target_os = "linux")]
+mod tool_window;
 pub mod wire;
 pub(crate) mod worker;
 pub mod workspace;

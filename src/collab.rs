@@ -4,7 +4,7 @@
 //! Participant credentials bind a mailbox to that authenticated identity.
 //! Messages stay in memory until acknowledged or the membership/session ends.
 pub(crate) mod lifecycle;
-mod tool_window;
+use crate::tool_window::ToolWindow;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -82,7 +82,7 @@ struct Agent {
     name: String,
     role: Option<String>,
     lifecycle: lifecycle::Lifecycle,
-    tool_window: tool_window::ToolWindow,
+    tool_window: ToolWindow,
     capabilities: Vec<String>,
     joined_at_ms: u64,
     main_activity: lifecycle::MainObservation,
@@ -650,7 +650,7 @@ impl Hub {
             name,
             role: role.filter(|value| !value.is_empty()),
             lifecycle: lifecycle::Lifecycle::new(Instant::now(), now),
-            tool_window: tool_window::ToolWindow::new(Instant::now()),
+            tool_window: ToolWindow::new(Instant::now()),
             capabilities,
             joined_at_ms: now,
             main_activity: lifecycle::MainObservation::new(Instant::now()),

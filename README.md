@@ -37,6 +37,8 @@ cargo install ssmcp --locked --bin ssmcp
 
 Linux and macOS are the primary targets. Check the [platform and installation notes](docs/releases.md) for Windows, Android, and desktop builds.
 
+On Omarchy, the [SSMCP status bar plugin](packaging/omarchy/README.md) embeds a collapsible session terminal and displays its tool calls over the last 10 minutes.
+
 ### Connect a project
 
 Run this from the project directory. Replace `alice` with your relay username. Use `--webui` to open the browser workbench instead of the terminal UI.

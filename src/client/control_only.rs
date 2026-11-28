@@ -211,7 +211,7 @@ async fn connect(options: &Options, service: Option<&crate::session::Runner>) ->
         ..ui::Ui::default()
     });
     let mut interrupt = interrupt_signal()?;
-    let mut terminate = terminate_signal()?;
+    let mut terminate = options.termination_signal()?;
     let cancelled = async {
         tokio::select! {
             _ = interrupt.recv() => {},
@@ -309,6 +309,8 @@ async fn connect(options: &Options, service: Option<&crate::session::Runner>) ->
                                 Ok(_) if requests.len() >= MAX_INFLIGHT => send(&mut writer,
                                     Frame::Reply { id, result: Err("control-only request limit reached; no request admitted".into()) }).await?,
                                 Ok(scope) => {
+                                    #[cfg(target_os = "linux")]
+                                    if let Some(activity) = &options.activity { activity.record(&operation); }
                                     let controls = controls.clone();
                                     requests.spawn(async move {
                                         let result = scope.scope(controls.perform(operation)).await;

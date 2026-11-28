@@ -1,0 +1,19 @@
+{
+  "cwd": "Working directory",
+  "command": "Launch command",
+  "save": "Save",
+  "open": "Open terminal",
+  "collapse": "Collapse",
+  "close": "Close session",
+  "closing": "Closing session…",
+  "configureHint": "Configure the SSMCP session",
+  "openHint": "Open SSMCP · Right-click for settings",
+  "waiting": "SSMCP · Waiting for session statistics",
+  "count": "%1 tool calls in the last 10 minutes · Right-click for settings",
+  "setupHelp": "Enter your username and server, then save to enable the session.",
+  "nextLaunch": "Saved changes take effect the next time you open the terminal.",
+  "saveError": "Omarchy could not save the settings.",
+  "terminalError": "The embedded terminal could not be loaded. Install qmltermwidget.",
+  "runtimeError": "The private runtime directory could not be created.",
+  "ended": "The SSMCP session has ended."
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.lightjunction.ssmcp",
+  "name": "SSMCP",
+  "version": "0.1.0",
+  "author": "LIghtJUNction",
+  "license": "MIT",
+  "description": "Open an SSMCP terminal and see its recent tool calls.",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "BarWidget.qml" },
+  "barWidget": {
+    "displayName": "SSMCP",
+    "category": "Development",
+    "defaultSection": "right",
+    "allowMultiple": false
+  }
+}

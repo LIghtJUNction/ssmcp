@@ -20,6 +20,7 @@ include = [
     "/apps/ssmcp-web/app.mjs",
     "/apps/ssmcp-web/src/*.mjs",
     "/packaging/ssmcp-web.desktop",
+    "/packaging/omarchy/**",
     "/packaging/magisk/src/ssmcp/ssmcp.rc",
     "/packaging/magisk/src/ssmcp/onboarding/**",
     "/packaging/magisk/assets/**",
