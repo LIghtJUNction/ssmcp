@@ -48,7 +48,7 @@ def verify(binary_dir):
             process = harness.spawn("local", [
                 str(harness.executable), "mcp", "--listen", f"127.0.0.1:{port}",
                 "--input", "pipe", "--name", "local-harness", "--no-watchdog", "--shell", "/bin/sh",
-            ], cwd=harness.workspace, env=env)
+            ], cwd=harness.workspace, env=env, stdin=subprocess.PIPE)
 
             def credentials():
                 if process.poll() is not None:

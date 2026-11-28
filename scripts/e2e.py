@@ -132,13 +132,13 @@ class Harness:
         self.checks.append(description)
         print(f"PASS {description}", flush=True)
 
-    def spawn(self, label, command, *, stdout=None, cwd=None, env=None):
+    def spawn(self, label, command, *, stdin=subprocess.DEVNULL, stdout=None, cwd=None, env=None):
         log_path = self.directory / f"{label}.log"
         log = log_path.open("w+")
         self.logs.append((log_path, log))
         process = subprocess.Popen(
             command,
-            stdin=subprocess.DEVNULL,
+            stdin=stdin,
             stdout=stdout if stdout is not None else log,
             stderr=log,
             start_new_session=True,

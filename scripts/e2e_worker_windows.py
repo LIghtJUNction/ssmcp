@@ -32,6 +32,7 @@ import sys
 import tempfile
 import termios
 import time
+from urllib.parse import urlsplit
 
 
 CHILD_FLAG = "--ssmcp-worker-window-child"
@@ -2007,8 +2008,11 @@ class WorkerWindows(Harness):
                    and state["offline"] == 4 and state["registered_workers"] == 0,
                    "the replacement preserves requested capacity without inheriting the old manager or workers")
         expected = list(original["argv"])
-        self.check(expected.count(f"{self.identity['username']}@{self.origin}") == 1,
+        username = self.identity["username"]
+        original_target = f"{username}@{self.origin}"
+        self.check(expected.count(original_target) == 1,
                    "the child originally selected the exact named loopback account")
+        expected[expected.index(original_target)] = f"{username}@{urlsplit(self.origin).netloc}"
         # Each window gets a newly allocated systemd scope in the same session slice.
         pattern = r"--unit=ssmcp-window-[0-9a-f]{32}\.scope"
         old_scopes = [arg for arg in expected if re.fullmatch(pattern, arg)]

@@ -122,7 +122,8 @@ class PortalPages:
             raise AssertionError("the fixture returned a URL outside its exact owned route")
         query = parse_qs(parsed.query, keep_blank_values=True, strict_parsing=True,
                          max_num_fields=16)
-        self.remember(*(item for values in query.values() for item in values))
+        for field in ("state", "code", "code_challenge"):
+            self.remember(*query.get(field, []))
         return parsed, query
 
     def portal(self, path, method="GET", data=None):

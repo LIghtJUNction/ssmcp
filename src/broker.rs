@@ -1585,7 +1585,9 @@ impl Broker {
             .await?;
             return Ok(());
         }
-        if self.relay_access.is_none() {
+        // The private local listener authenticates its Unix peer before attach.
+        // Account and external relay connections still use their own checks.
+        if self.relay_access.is_none() && (!self.private_local_host || is_device) {
             let verified = match owner.as_ref() {
                 Some(_) if registration.is_some() => true,
                 Some(subject) => {
