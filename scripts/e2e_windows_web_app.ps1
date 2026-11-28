@@ -128,7 +128,8 @@ function Submit-Loopback($window, [string]$origin) {
         if ($starts.Count) { break }
         Start-Sleep -Milliseconds 200
     } until ($wait.Elapsed.TotalSeconds -ge 20)
-    if ($starts.Count -ne 1 -or !$starts[0].CommandLine.Contains("desktop-test@$origin")) {
+    $authority = ([Uri]$origin).Authority
+    if ($starts.Count -ne 1 -or !$starts[0].CommandLine.Contains("desktop-test@$authority")) {
         throw 'The window did not create exactly one core for the selected loopback relay.'
     }
     return Get-Process -Id $starts[0].ProcessId
@@ -162,6 +163,9 @@ try {
         throw 'Closing the other application did not end its launcher cleanly.'
     }
     $report.status = 'passed'
+} catch {
+    $report.error = $_.Exception.Message
+    throw
 } finally {
     $relay.Stop()
     foreach ($process in $owned) {

@@ -3,6 +3,8 @@
 
 #[path = "support/http_client.rs"]
 mod http_client;
+#[path = "support/verified_broker.rs"]
+mod verified_broker;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Value, json};
@@ -70,11 +72,14 @@ struct Server {
     task: JoinHandle<()>,
     peers: Vec<Peer>,
     scratch: Scratch,
+    _accounts: verified_broker::Accounts,
 }
 
 impl Server {
     async fn start() -> Self {
-        let broker = Arc::new(Broker::new("https://ssmcp.example".into()));
+        let mut broker = Broker::new("https://ssmcp.example".into());
+        let accounts = verified_broker::Accounts::configure(&mut broker);
+        let broker = Arc::new(broker);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let router = ssmcp::http::router(broker.clone());
@@ -91,6 +96,7 @@ impl Server {
             task,
             peers: Vec::new(),
             scratch: Scratch::new(),
+            _accounts: accounts,
         }
     }
 
