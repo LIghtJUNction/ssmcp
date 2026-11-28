@@ -620,6 +620,7 @@ async fn page_inner(
             &values["code"],
             &csrf,
             requested_username.as_deref().unwrap_or_default(),
+            &account.github_login,
         ))
         .into_response());
     }
@@ -639,22 +640,41 @@ async fn authorize(State(broker): State<Arc<Broker>>, request: Request) -> Respo
 async fn authorize_inner(broker: &Broker, request: Request) -> Result<Response, ApiError> {
     enabled(broker)?;
     let (headers, form) = form(request).await?;
-    only(&form, &["csrf", "code", "decision"])?;
     let (_, subject) = broker.portal.verify(&headers, &form, &broker.public_url)?;
     let subject = subject.ok_or(Problem::Unauthorized)?;
-    let allow = match form["decision"].as_str() {
-        "allow" => true,
-        "deny" => false,
+    let allow = match form.get("decision").map(String::as_str) {
+        Some("allow") => true,
+        Some("deny") => false,
         _ => return Err(ApiError::invalid("decision must be allow or deny.")),
     };
+    let code = form.get("code").ok_or_else(ApiError::expired)?;
     let (_, grant) = {
         let mut state = lock(&broker.portal)?;
         state.charge("authorize", 600)?;
-        state.by_code(&form["code"])?
+        state.by_code(code)?
     };
     // The grant lock keeps approval invisible until the durable claim succeeds.
     // A verified identity is required even when this request only denies access.
     let mut grant = grant.lock().await;
+    if grant.device_only && allow {
+        only(
+            &form,
+            &[
+                "csrf",
+                "code",
+                "decision",
+                "account_confirmed",
+                "control_confirmed",
+            ],
+        )?;
+        if form["account_confirmed"] != "yes" || form["control_confirmed"] != "yes" {
+            return Err(ApiError::invalid(
+                "Confirm the account and its permission to control this device.",
+            ));
+        }
+    } else {
+        only(&form, &["csrf", "code", "decision"])?;
+    }
     let previous = grant.decision.clone();
     grant.decide(&subject, allow)?;
     let username = grant.requested_username.clone().filter(|_| allow);
@@ -663,15 +683,11 @@ async fn authorize_inner(broker: &Broker, request: Request) -> Result<Response, 
     let result = broker
         .portal
         .storage(move |store| match username {
-            Some(username) if device_only => {
-                if store
-                    .account_by_handle(&username)?
-                    .is_none_or(|account| account.subject != subject)
-                {
-                    return Err(Problem::UsernameBound);
-                }
-                store.account(&subject)
-            }
+            Some(username) if device_only => match store.account_by_handle(&username)? {
+                Some(account) if account.subject == subject => store.account(&subject),
+                Some(_) => Err(Problem::UsernameBound),
+                None => store.register_handle(&subject, &username),
+            },
             Some(username) if registration_only => store.register_handle(&subject, &username),
             Some(username) => store.claim_handle(&subject, &username),
             None => store.account(&subject),
@@ -688,7 +704,7 @@ async fn authorize_inner(broker: &Broker, request: Request) -> Result<Response, 
         };
         return Err(problem.into());
     }
-    Ok(Redirect::to(&format!("/setup?code={}", form["code"])).into_response())
+    Ok(Redirect::to(&format!("/setup?code={code}")).into_response())
 }
 
 #[cfg(test)]
@@ -728,7 +744,7 @@ async fn start_client_request(
     let input: ClientStart = body(request, &broker.public_url).await?;
     if input.device_only && (registration_only || input.username.is_none()) {
         return Err(ApiError::invalid(
-            "device authorization requires an existing username",
+            "device authorization requires a username",
         ));
     }
     let name = input.name.trim();
@@ -877,13 +893,38 @@ async fn client_poll(
     Ok(Json(json!({"status":"authorized","access_token":token,
         "identity":public_identity,"expires_in":expires})))
 }
-fn device_consent_page(name: &str, code: &str, csrf: &str, username: &str) -> String {
+fn device_consent_page(
+    name: &str,
+    code: &str,
+    csrf: &str,
+    username: &str,
+    github_login: &str,
+) -> String {
     view::page(
         "授权被控设备",
         &format!(
-            r#"<section class="card"><h1>授权被控设备</h1><p>允许设备 <strong>{}</strong> 以 <strong>{}</strong> 的身份上线。请核对被控端显示的验证码。</p><pre>{}</pre><form method="post" action="/setup/authorize"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="code" value="{}"><button class="button" type="submit" name="decision" value="allow">授权这台设备</button><button class="secondary" type="submit" name="decision" value="deny">拒绝</button></form></section>"#,
+            r#"<section class="card"><h1>授权被控设备 <span lang="en">Authorize this device</span></h1>
+<p>设备 / <span lang="en">Device</span> <strong>{}</strong><br>
+中继用户名 / <span lang="en">Relay username</span> <strong>{}</strong><br>
+当前 GitHub 账号 / <span lang="en">Signed-in GitHub account</span> <strong>{}</strong></p>
+<p>请核对被控端显示的验证码。<br><span lang="en">Match the code shown on the device.</span></p><pre>{}</pre>
+<p>还没有中继用户名？启动时可填写任意可用的用户名。确认后，可用的名称会登记到当前 GitHub 账号。<br>
+<span lang="en">Need a relay username? Enter any available name when you connect. Confirming registers an available name to the signed-in GitHub account.</span></p>
+<form method="post" action="/setup/authorize"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="code" value="{}">
+<fieldset><legend>1. 确认账号 / <span lang="en">Confirm the account</span></legend>
+<label><input type="checkbox" name="account_confirmed" value="yes" required> 这是我自己的账号，或我明确允许控制此设备的朋友的账号。<br>
+<span lang="en">This is my account or a friend's account I explicitly allow to control this device.</span></label></fieldset>
+<fieldset><legend>2. 确认权限 / <span lang="en">Confirm access</span></legend>
+<label><input type="checkbox" name="control_confirmed" value="yes" required> 我了解该账号可控制开启的会话，包括运行命令和访问会话可读的文件。<br>
+<span lang="en">I understand that this account can control the session, run commands and access files available to the session.</span></label></fieldset>
+<button class="button" type="submit" name="decision" value="allow">授权这台设备 / <span lang="en">Authorize device</span></button></form>
+<form method="post" action="/setup/authorize"><input type="hidden" name="csrf" value="{}"><input type="hidden" name="code" value="{}">
+<button class="secondary" type="submit" name="decision" value="deny">拒绝 / <span lang="en">Deny</span></button></form></section>"#,
             escape(name),
             escape(username),
+            escape(github_login),
+            escape(code),
+            escape(csrf),
             escape(code),
             escape(csrf),
             escape(code)

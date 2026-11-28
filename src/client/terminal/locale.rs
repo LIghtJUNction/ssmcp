@@ -11,6 +11,10 @@ const EN: &[Message<'static>] = &[
     ),
     Message::text("connection.online", "connected"),
     Message::text(
+        "controllers.first_connection",
+        "First connection: confirm this is your account or a friend's account you want to allow. If you need a relay username, choose any available name. In the browser, confirm that this account can control the session and run commands.",
+    ),
+    Message::text(
         "controllers.approval_required",
         "Adding another controller requires explicit approval on this device. Run `{command}`",
     ),
@@ -44,6 +48,10 @@ const ZH: &[Message<'static>] = &[
     Message::text("connection.offline", "未连接"),
     Message::text("connection.queue_update", "队列需要更新服务端"),
     Message::text("connection.online", "已连接"),
+    Message::text(
+        "controllers.first_connection",
+        "首次连接：请确认这是你自己的账号，或你明确许可的朋友的账号。没有中继用户名时可以选择任意可用名称。请在浏览器中确认该账号可控制会话和运行命令。",
+    ),
     Message::text(
         "controllers.approval_required",
         "添加其他控制者需要在这台设备上显式授权。请运行 `{command}`",

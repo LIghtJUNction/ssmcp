@@ -13,6 +13,10 @@ const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const port = Number(process.env.WEB_TEST_PORT || 14173);
 const server = spawn(process.execPath, [fileURLToPath(new URL('../dev-server.mjs', import.meta.url)), '--port', String(port)], { stdio: ['ignore', 'pipe', 'pipe'] });
+async function confirmLaunch(page) {
+  await page.locator('#launch-account-confirmed').check();
+  await page.locator('#launch-control-confirmed').check();
+}
 let browser;
 try {
   await new Promise((resolve, reject) => { server.stdout.once('data', resolve); server.once('error', reject); server.once('exit', code => reject(new Error(`Static server exited: ${code}`))); });
@@ -460,6 +464,7 @@ try {
   await page.locator('#new-session').click();
   await page.locator('#launch-name').fill('session1');
   await page.locator('#launch-relay').fill('relay.example');
+  await confirmLaunch(page);
   await page.locator('#launch-connect').click();
   await page.getByText('创建结果未确定，请点“核对上次创建”重试原请求。').waitFor();
   assert.equal(await page.locator('#launch-name').isDisabled(), true);
@@ -496,6 +501,7 @@ try {
   await page.locator('#chat-send').click();
   await page.locator('#launch-name').fill('session2');
   await page.locator('#launch-relay').fill('relay.example');
+  await confirmLaunch(page);
   await page.locator('#launch-connect').click();
   await page.locator('.session-tab[aria-selected="true"]').filter({hasText:'session2@relay.example'}).waitFor();
   assert.equal(newCount, 2);
@@ -604,6 +610,7 @@ try {
   assert.deepEqual(bootstrapRequests, []);
   await moduleTab.locator('#launch-name').fill('module');
   await moduleTab.locator('#launch-relay').fill('relay.example');
+  await confirmLaunch(moduleTab);
   await moduleTab.locator('#launch-connect').click();
   await moduleTab.locator('#device-login-link').waitFor();
   assert.equal(await moduleTab.locator('#device-login-link').getAttribute('href'), loginLink);
@@ -689,13 +696,20 @@ try {
   assert.equal(await setup.locator('#launch-relay').inputValue(), 'ssmcp.lmm.best');
   assert.equal(starts.length, 0);
   if (process.env.WEB_TEST_EVIDENCE) await setup.screenshot({path:join(process.env.WEB_TEST_EVIDENCE, 'first-connection-mobile.png')});
-  assert.deepEqual(await setup.locator('#launch-form input:visible').evaluateAll(inputs => inputs.map(input => input.id)), ['launch-name','launch-relay']);
+  assert.deepEqual(await setup.locator('#launch-form input:visible').evaluateAll(inputs => inputs.map(input => input.id)),
+    ['launch-name','launch-relay','launch-account-confirmed','launch-control-confirmed']);
   assert.deepEqual(await setup.locator('#launch-form button:visible').allTextContents(), ['连接']);
   assert.equal(await setup.locator('#launch-name').evaluate(e => e === document.activeElement), true);
   await setup.setViewportSize({width:320,height:640});
   assert.equal(await setup.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await setup.locator('#launch-name').fill('new-user');
   await setup.locator('#launch-name').press('Enter');
+  assert.equal(starts.length, 0);
+  await setup.locator('#launch-account-confirmed').check();
+  await setup.locator('#launch-connect').click();
+  assert.equal(starts.length, 0);
+  await setup.locator('#launch-control-confirmed').check();
+  await setup.locator('#launch-connect').click();
   await setup.locator('#launch-hosted').waitFor();
   assert.equal(starts.length, 1);
   assert.deepEqual([starts[0].terms,starts[0].privacy], [false,false]);
@@ -706,6 +720,9 @@ try {
   assert.deepEqual([starts[1].terms,starts[1].privacy], [true,true]);
   await setup.locator('#launch-relay').fill('my.example');
   assert.equal(await setup.locator('#launch-hosted').isVisible(), false);
+  assert.equal(await setup.locator('#launch-account-confirmed').isChecked(), false);
+  assert.equal(await setup.locator('#launch-control-confirmed').isChecked(), false);
+  await confirmLaunch(setup);
   await setup.locator('#launch-relay').press('Enter');
   await setup.waitForFunction(() => !document.querySelector('#launch-connect').disabled);
   assert.deepEqual(starts[2], {request_id:starts[2].request_id, destination:'new-user@my.example', terms:false, privacy:false});

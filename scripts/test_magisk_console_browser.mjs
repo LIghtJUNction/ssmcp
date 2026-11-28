@@ -135,14 +135,25 @@ try {
   }
   await onboarding.emulateMedia({colorScheme:'light'});
   if (process.env.WEB_TEST_EVIDENCE) await onboarding.screenshot({ path: resolve(process.env.WEB_TEST_EVIDENCE, 'magisk-first-run.png') });
-  await onboarding.locator('#name').fill('my-user'); await onboarding.locator('#root').check();
+  await onboarding.locator('#name').fill('my-user');
+  await onboarding.locator('#connect').tap();
+  await onboarding.locator('#status').filter({hasText:'Confirm that this is an account you want to allow.'}).waitFor();
+  await onboarding.locator('#account-confirmed').check();
+  await onboarding.locator('#connect').tap();
+  await onboarding.locator('#status').filter({hasText:'Confirm the Android root access.'}).waitFor();
+  await onboarding.locator('#root').check();
   await onboarding.locator('#connect').tap();
   await onboarding.getByText('请先阅读并同意用户协议。', {exact:true}).waitFor();
   assert.deepEqual(writes, []);
   await onboarding.locator('#server').fill('relay.example');
+  assert.equal(await onboarding.locator('#register-account').getAttribute('href'), 'https://relay.example/#account');
+  assert.equal(await onboarding.locator('#account-confirmed').isChecked(), false);
+  assert.equal(await onboarding.locator('#root').isChecked(), false);
+  await onboarding.locator('#account-confirmed').check();
+  await onboarding.locator('#root').check();
   await onboarding.locator('#connect').tap();
   await expectComplete(onboarding, 'my-user@relay.example');
-  assert.deepEqual(writes, [{target:'my-user@relay.example',root:true,terms:false,privacy:false}]);
+  assert.deepEqual(writes, [{target:'my-user@relay.example',account_confirmed:true,root:true,terms:false,privacy:false}]);
 
   await onboarding.locator('#complete-mcp').filter({hasText: 'https://relay.example/mcp'}).waitFor();
   // An upgraded tab may still contain the previous release's storage entry.
@@ -165,6 +176,7 @@ try {
   await competing.locator('#setup').waitFor();
   assert.equal(await competing.locator('#name').inputValue(), 'prefilled');
   assert.equal(await competing.locator('#server').inputValue(), 'relay.example');
+  await competing.locator('#account-confirmed').check();
   await competing.locator('#root').check(); await competing.locator('#connect').tap();
   await expectComplete(competing, 'existing@relay.example');
   assert.equal(writes.length, 2, 'a conflict reads the effective account without repeating the write');

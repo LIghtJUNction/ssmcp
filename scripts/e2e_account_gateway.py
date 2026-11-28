@@ -215,7 +215,8 @@ class DeviceConsentBrowser(PortalPages):
         if fields.get("code") != code:
             raise AssertionError("consent did not identify this device authorization")
         status, _, headers = self.portal("/setup/authorize", "POST", {
-            "csrf": fields["csrf"], "code": code, "decision": "allow"})
+            "csrf": fields["csrf"], "code": code, "decision": "allow",
+            "account_confirmed": "yes", "control_confirmed": "yes"})
         if status != 303 or headers.get("location") != path:
             raise AssertionError("the portal did not approve this device grant")
 

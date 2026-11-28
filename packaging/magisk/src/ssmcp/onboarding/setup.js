@@ -12,8 +12,22 @@ function status(message) {
 function relayChanged() {
   const server = el('server').value.trim();
   el('hosted').hidden = !usesOfficialRelay(server);
+  const registration = el('register-account');
+  registration.removeAttribute('href');
+  try {
+    const relay = new URL(server.includes('://') ? server : 'https://' + server);
+    if (relay.protocol === 'https:' && !relay.username && !relay.password &&
+        relay.pathname === '/' && !relay.search && !relay.hash) {
+      registration.href = relay.origin + '/#account';
+    }
+  } catch { /* An incomplete address has no registration link. */ }
 }
-el('server').addEventListener('input', relayChanged);
+function resetConfirmations() {
+  el('account-confirmed').checked = false;
+  el('root').checked = false;
+}
+el('name').addEventListener('input', resetConfirmations);
+el('server').addEventListener('input', () => { relayChanged(); resetConfirmations(); });
 
 async function configure() {
   if (document.body.dataset.view !== 'setup' || el('connect').disabled) return;
@@ -24,7 +38,10 @@ async function configure() {
     el(name ? 'server' : 'name').focus();
     return;
   }
-  const required = [['root', '请先确认 Android root 权限。']];
+  const required = [
+    ['account-confirmed', '请先确认这是你许可的账号。 / Confirm that this is an account you want to allow.'],
+    ['root', '请先确认 Android root 权限。 / Confirm the Android root access.'],
+  ];
   if (!el('hosted').hidden) {
     required.push(['terms', '请先阅读并同意用户协议。'], ['privacy', '请先阅读并同意隐私政策。']);
   }
@@ -36,9 +53,10 @@ async function configure() {
   }
   const request = {
     target: `${name}@${server}`,
+    account_confirmed: el('account-confirmed').checked,
     root: el('root').checked, terms: el('terms').checked, privacy: el('privacy').checked,
   };
-  const controls = ['name', 'server', 'root', 'terms', 'privacy', 'connect'].map(el);
+  const controls = ['name', 'server', 'account-confirmed', 'root', 'terms', 'privacy', 'connect'].map(el);
   controls.forEach(control => { control.disabled = true; });
   status('正在检查中继账号…');
   try {

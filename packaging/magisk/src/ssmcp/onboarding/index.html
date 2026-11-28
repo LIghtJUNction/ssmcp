@@ -27,11 +27,21 @@
         <code>@</code>
         <label><input id="server" value="ssmcp.lmm.best" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false"><span>↑ 中继服务器，可改为自部署域名</span></label>
       </div>
+      <p>没有中继账号？选一个可用用户名，到中继注册后再连接。<br>
+        <span lang="en">Need a relay account? Choose any available username and register it before connecting.</span>
+        <a class="text-link" id="register-account" target="_blank" rel="noopener noreferrer">注册中继账号 / <span lang="en">Register a relay account</span></a>
+      </p>
       <fieldset class="consent">
-        <legend>权限与条款</legend>
+        <legend>连接前确认 / <span lang="en">Before connecting</span></legend>
+        <label class="check-row">
+          <input type="checkbox" id="account-confirmed">
+          <span>1. 这是我的账号，或我明确许可的朋友的账号。<br>
+            <span lang="en">This is my account or a friend's account I explicitly allow.</span></span>
+        </label>
         <label class="check-row">
           <input type="checkbox" id="root">
-          <span>我了解此会话以 <strong>Android root</strong> 运行。获授权的控制端可以运行 root 命令、读取设备数据并修改系统。</span>
+          <span>2. 我了解该账号可控制此会话，运行 <strong>Android root</strong> 命令、读取设备数据和修改系统。<br>
+            <span lang="en">I understand that this account can control the session, run Android root commands, read device data and change the system.</span></span>
         </label>
         <div id="hosted">
           <p>使用官方中继需同意以下条款。也可以填写自己的中继服务器。</p>
@@ -42,7 +52,6 @@
       <div class="setup-actions">
         <button type="button" id="connect" class="primary">连接中继</button>
       </div>
-      <p>如需注册用户名，请前往你使用的中继服务。</p>
       <a class="text-link deploy-link" href="https://github.com/LIghtJUNction/ssmcp/blob/main/docs/deployment.md" target="_blank" rel="noopener">查看自部署教程 <span aria-hidden="true">↗</span></a>
     </section>
 

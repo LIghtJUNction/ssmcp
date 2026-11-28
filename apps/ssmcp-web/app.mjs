@@ -881,11 +881,19 @@ function consentStep(visible) {
   }
 }
 $('launch-relay').addEventListener('input', () => consentStep(false));
+for (const id of ['launch-name', 'launch-relay']) {
+  $(id).addEventListener('input', () => {
+    $('launch-account-confirmed').checked = false;
+    $('launch-control-confirmed').checked = false;
+  });
+}
 
 function showLaunch() {
   show('launch-entry', !gateway.authenticated);
   show('workbench-shell', false);
   show('launch-setup', gateway.authenticated);
+  show('launch-device-risk', !modulePage);
+  show('launch-chat-risk', modulePage);
   if (!gateway.authenticated) {
     setText('entry-hint', modulePage ? '请从 Magisk 管理器的 SSMCP 模块执行操作。'
       : /Android|iPhone|iPad/.test(navigator.userAgent) ? '请从设备上的 SSMCP 应用打开。' : '请在本机运行 ssmcp gui open。');
@@ -901,7 +909,9 @@ function showLaunch() {
 }
 function updateLaunchControls(sending) {
   const pending = Boolean(gateway.pendingOwnedRequest);
-  for (const id of ['launch-name', 'launch-relay', 'launch-terms', 'launch-privacy']) $(id).disabled = sending || pending;
+  for (const id of ['launch-name', 'launch-relay', 'launch-account-confirmed', 'launch-control-confirmed', 'launch-terms', 'launch-privacy']) {
+    $(id).disabled = sending || pending;
+  }
   $('launch-connect').disabled = sending;
   $('launch-back').disabled = sending || (pending && !opened.size);
   show('launch-request-id', pending);
@@ -920,6 +930,7 @@ $('launch-back').addEventListener('click', async () => {
 $('launch-form').addEventListener('submit', async event => {
   event.preventDefault();
   if (!gateway.authenticated || $('launch-connect').disabled) return;
+  if (!gateway.pendingOwnedRequest && !$('launch-form').reportValidity()) return;
   const relay = $('launch-relay').value.trim();
   const args = { destination: $('launch-name').value.trim() + '@' + relay,
     terms: $('launch-terms').checked, privacy: $('launch-privacy').checked };

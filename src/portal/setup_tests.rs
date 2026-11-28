@@ -125,11 +125,24 @@ impl Fixture {
         code: &str,
         decision: &str,
     ) -> reqwest::Response {
+        self.consent_with_checks(cookie, csrf, code, decision, &[])
+            .await
+    }
+    async fn consent_with_checks(
+        &self,
+        cookie: &str,
+        csrf: &str,
+        code: &str,
+        decision: &str,
+        checks: &[(&str, &str)],
+    ) -> reqwest::Response {
+        let mut fields = vec![("csrf", csrf), ("code", code), ("decision", decision)];
+        fields.extend_from_slice(checks);
         self.client
             .post(format!("{}/setup/authorize", self.base))
             .header("cookie", cookie)
             .header("origin", "https://ssmcp.test")
-            .form(&[("csrf", csrf), ("code", code), ("decision", decision)])
+            .form(&fields)
             .send()
             .await
             .unwrap()
@@ -843,6 +856,7 @@ async fn public_account_shows_default_and_updates_own_announcement() {
 
 #[tokio::test]
 async fn device_oauth_binds_the_browser_account_and_issues_one_device_only_credential() {
+    let checks = [("account_confirmed", "yes"), ("control_confirmed", "yes")];
     let fixture = Fixture::new().await;
     fixture
         .broker
@@ -870,7 +884,7 @@ async fn device_oauth_binds_the_browser_account_and_issues_one_device_only_crede
     let (other, csrf) = fixture.session("456");
     assert!(
         !fixture
-            .consent(&other, &csrf, code, "allow")
+            .consent_with_checks(&other, &csrf, code, "allow", &checks)
             .await
             .status()
             .is_redirection()
@@ -899,9 +913,19 @@ async fn device_oauth_binds_the_browser_account_and_issues_one_device_only_crede
         .await
         .unwrap();
     assert!(page.contains("授权这台设备") && page.contains("alice-home"));
+    assert!(page.contains("Confirm the account") && page.contains("Confirm access"));
+    for incomplete in [&checks[..0], &checks[..1], &checks[1..]] {
+        assert_eq!(
+            fixture
+                .consent_with_checks(&cookie, &csrf, code, "allow", incomplete)
+                .await
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+    }
     assert_eq!(
         fixture
-            .consent(&cookie, &csrf, code, "allow")
+            .consent_with_checks(&cookie, &csrf, code, "allow", &checks)
             .await
             .status(),
         303
@@ -912,4 +936,36 @@ async fn device_oauth_binds_the_browser_account_and_issues_one_device_only_crede
     assert!(allowed["device_token"].as_str().unwrap().starts_with("cd_"));
     assert!(allowed.get("access_token").is_none());
     assert_eq!(poll_client(&fixture, secret).await.1["status"], "expired");
+
+    let response: Value = fixture
+        .client
+        .post(format!("{}/api/client/login/start", fixture.base))
+        .json(&json!({"name":"first device","username":"bob-desktop","device_only":true}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(response["username_available"], true);
+    let (cookie, csrf) = fixture.session("456");
+    assert_eq!(
+        fixture
+            .consent_with_checks(
+                &cookie,
+                &csrf,
+                response["user_code"].as_str().unwrap(),
+                "allow",
+                &checks
+            )
+            .await
+            .status(),
+        StatusCode::SEE_OTHER
+    );
+    let (_, registered) = poll_client(&fixture, response["device_code"].as_str().unwrap()).await;
+    assert_eq!(registered["identity"]["username"], "bob-desktop");
+    assert_eq!(registered["identity"]["subject"], "456");
+    assert!(registered.get("device_token").is_some());
 }

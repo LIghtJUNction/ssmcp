@@ -22,6 +22,22 @@
       <label class="launch-field"><span>服务器地址</span>
         <input id="launch-relay" name="server" value="ssmcp.lmm.best" required autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="url" enterkeyhint="go">
       </label>
+      <p class="launch-registration">没有中继账号？填写任意可用的用户名，在下一步登录并注册。<br>
+        <span lang="en">Need a relay account? Choose any available username, then sign in to register it.</span>
+      </p>
+      <fieldset class="launch-confirmations">
+        <legend>连接前确认 <span lang="en">Before connecting</span></legend>
+        <label><input id="launch-account-confirmed" type="checkbox" required><span>
+          1. 这是我的账号，或我明确许可的朋友的账号。<br>
+          <span lang="en">This is my account or a friend's account I explicitly allow.</span>
+        </span></label>
+        <label><input id="launch-control-confirmed" type="checkbox" required>
+          <span id="launch-device-risk">2. 我了解该账号可控制会话、运行命令并访问会话可读的文件。<br>
+            <span lang="en">I understand this account can control the session, run commands and access files available to it.</span></span>
+          <span id="launch-chat-risk" hidden>2. 我了解该账号可控制聊天会话、读取和发送消息。<br>
+            <span lang="en">I understand this account can control the chat session and read and send messages.</span></span>
+        </label>
+      </fieldset>
       <div id="launch-hosted" class="launch-consent" hidden>
         <label><input id="launch-terms" type="checkbox"> 我同意<a href="https://ssmcp.lmm.best/legal/terms" target="_blank" rel="noopener noreferrer">用户协议</a></label>
         <label><input id="launch-privacy" type="checkbox"> 我同意<a href="https://ssmcp.lmm.best/legal/privacy" target="_blank" rel="noopener noreferrer">隐私政策</a></label>

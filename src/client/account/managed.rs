@@ -240,6 +240,10 @@ where
 }
 
 fn display(url: &Url, code: &str, browser: bool) -> Result<()> {
+    eprintln!(
+        "{}",
+        super::super::terminal::locale::text("controllers.first_connection")
+    );
     eprintln!("Verify {code} and sign in on this device: {url}");
     if browser {
         let _ = super::open_desktop_link(url);

@@ -244,6 +244,8 @@ fn failure(status: StatusCode, message: impl ToString) -> Response {
 #[derive(Deserialize)]
 struct Setup {
     target: String,
+    #[serde(default)]
+    account_confirmed: bool,
     root: bool,
     terms: bool,
     privacy: bool,
@@ -268,6 +270,12 @@ async fn configure(
 
 async fn configure_inner(state: &Console, input: Setup) -> Result<Value> {
     let (name, server) = parse_target(&input.target)?;
+    if !input.account_confirmed {
+        return Err(
+            "请先确认这是你许可的账号。 / Confirm that this is an account you want to allow."
+                .into(),
+        );
+    }
     let hosted = reqwest::Url::parse(&server)?
         .host_str()
         .is_some_and(|host| host.trim_end_matches('.') == "ssmcp.lmm.best");

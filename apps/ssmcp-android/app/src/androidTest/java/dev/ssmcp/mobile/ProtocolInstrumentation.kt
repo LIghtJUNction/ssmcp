@@ -142,6 +142,8 @@ class ProtocolInstrumentation : Instrumentation() {
                     const relay = document.getElementById('launch-relay');
                     relay.value = 'http://127.0.0.1:$unusedPort';
                     relay.dispatchEvent(new Event('input', { bubbles: true }));
+                    document.getElementById('launch-account-confirmed').checked = true;
+                    document.getElementById('launch-control-confirmed').checked = true;
                     document.getElementById('launch-connect').click()
                 """.trimIndent())
                 waitFor(recreated, "the explicitly created owned session", """
