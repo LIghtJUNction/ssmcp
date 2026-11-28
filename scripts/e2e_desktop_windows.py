@@ -24,6 +24,7 @@ def run(desktop):
                    XDG_DATA_HOME=str(home / "data"))
         registry = home / "sessions"
         profile = home / "auth" / "desktop-target-v1.json"
+        destination = f"{IDENTITY['username']}@{test.state.origin}"
         evidence = os.environ.get("SSMCP_DESKTOP_E2E_EVIDENCE")
 
         def open_window(label):
@@ -65,7 +66,7 @@ def run(desktop):
                       "relay_sessions": len(clients()), "visible_windows": len(windows()),
                       "profile_exists": profile.is_file()}
             with contextlib.suppress(OSError, ValueError):
-                counts["profile_matches"] = json.loads(profile.read_text()) == test.state.allow_principal
+                counts["profile_matches"] = json.loads(profile.read_text()) == destination
             print("Desktop fixture " + json.dumps(counts, sort_keys=True), file=sys.stderr)
             for overview in sorted(registry.glob("frontends/*/live/*/overview.json"))[:2]:
                 # Query just the owned synthetic core through its read-only interface.
@@ -116,7 +117,7 @@ def run(desktop):
             first_id, = wait_for(clients, "first desktop relay client", timeout=12)
             first_pid, first_root = wait_for(lambda: registration(first), "first private core")
             wait_for(lambda: profile.is_file() and json.loads(profile.read_text())
-                     == test.state.allow_principal, "saved desktop destination", timeout=22)
+                     == destination, "saved desktop destination", timeout=22)
 
             second = open_window("second")
             assert len(windows()) == 2
