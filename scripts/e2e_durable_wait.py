@@ -218,7 +218,8 @@ class DurableWait(Harness):
         payload = {"jsonrpc": "2.0", "id": self.request_id, "method": "tools/call",
                    "params": {"name": "await", "arguments": arguments,
                               "_meta": {PROTOCOL_META: MODERN, CAPABILITIES_META: {}}}}
-        connection = http.client.HTTPConnection("127.0.0.1", self.http_port, timeout=5)
+        connection = http.client.HTTPSConnection(
+            "127.0.0.1", self.http_port, timeout=5, context=self.account_gateway.tls_context)
         self.record("abandoned_observation_dispatch", wait_id=self.wait_id,
                     rpc_id=self.request_id, response_outcome="unknown")
         self.http_requests += 1

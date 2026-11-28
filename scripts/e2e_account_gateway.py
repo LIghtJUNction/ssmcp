@@ -157,7 +157,7 @@ class PortalPages:
             start = page.find('id="account"')
             end = page.find("</section>", start)
             section = page[start:end] if start >= 0 and end > start else ""
-            address = handle + "@" + self.origin
+            address = handle + "@" + urlsplit(self.origin).netloc
             self.check(address in section and form.fields.get("username") == handle
                        and self.identity["principal"] not in section
                        and "gh-" + self.identity["subject"] not in section,

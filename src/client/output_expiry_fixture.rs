@@ -439,7 +439,7 @@ fn loopback_server(server: &str) -> Result<(), String> {
                 .ok()
         })
         .is_some_and(|host| host.is_loopback());
-    if url.scheme() != "http"
+    if url.scheme() != "https"
         || !loopback
         || !url.username().is_empty()
         || url.password().is_some()
@@ -447,7 +447,7 @@ fn loopback_server(server: &str) -> Result<(), String> {
         || url.fragment().is_some()
         || url.path() != "/"
     {
-        return Err("fixture requires the private HTTP loopback gateway origin".into());
+        return Err("fixture requires the private HTTPS loopback gateway origin".into());
     }
     Ok(())
 }
@@ -625,12 +625,12 @@ fn expiry_control_rejects_other_bindings_and_non_loopback_origins() {
     wrong.client_id = "d".repeat(64);
     assert!(check_binding(1, &wrong, &binding).is_err());
     assert!(check_binding(2, &binding, &binding).is_err());
-    assert!(loopback_server("http://127.0.0.1:4321").is_ok());
+    assert!(loopback_server("https://127.0.0.1:4321").is_ok());
     for origin in [
-        "https://127.0.0.1:4321",
-        "http://example.com",
-        "http://user@127.0.0.1",
-        "http://127.0.0.1/path",
+        "http://127.0.0.1:4321",
+        "https://example.com",
+        "https://user@127.0.0.1",
+        "https://127.0.0.1/path",
     ] {
         assert!(loopback_server(origin).is_err());
     }
