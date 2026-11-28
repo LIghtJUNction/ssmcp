@@ -17,6 +17,8 @@ SSMCP 是用 Rust 编写的 MCP 客户端和中继服务。在项目目录启动
 
 ## 演示
 
+[![SSMCP 演示视频预览，画面中有三个项目会话](https://i.ytimg.com/vi/9LqpS5BXRTQ/hqdefault.jpg)](https://youtu.be/9LqpS5BXRTQ)
+
 [哔哩哔哩](https://b23.tv/wA4gzmV) · [抖音](https://v.douyin.com/_3yRZNA-Qls/) · [YouTube 英文演示](https://youtu.be/9LqpS5BXRTQ)
 
 安装后可以用示例数据预览终端界面，无需登录或连接设备。

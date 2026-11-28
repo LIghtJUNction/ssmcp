@@ -17,7 +17,9 @@ SSMCP is a Rust client and relay for the Model Context Protocol (MCP). Start a s
 
 ## Demo
 
-[Watch the English demo on YouTube](https://youtu.be/9LqpS5BXRTQ). After installing, explore the terminal UI with sample data, without signing in or connecting a device.
+[![Watch the SSMCP demo showing three project sessions](https://i.ytimg.com/vi/9LqpS5BXRTQ/hqdefault.jpg)](https://youtu.be/9LqpS5BXRTQ)
+
+After installing, explore the terminal UI with sample data, without signing in or connecting a device.
 
 ```sh
 ssmcp ui preview
