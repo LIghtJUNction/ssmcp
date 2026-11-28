@@ -168,7 +168,8 @@ const HELP_FULL: &str = concat!(
        ssmcp join USERNAME@SERVER --token-stdin [--no-browser]
        ssmcp whoami [USERNAME@SERVER] [--json]
        ssmcp list [--json]
-       ssmcp controllers [list] [--json]
+       ssmcp controllers [list|history] [--json]
+       ssmcp controllers approve|revoke USERNAME@SERVER
        ssmcp controllers approve|revoke RELAY PROVIDER SUBJECT
        ssmcp config <set|get|unset> server [URL]
        ssmcp config path
@@ -2959,6 +2960,7 @@ pub(crate) fn watchdog_retries(
         && error.is_none_or(|error| {
             !error.is::<UnsupportedWireProtocol>()
                 && !error.is::<relay::PermanentFailure>()
+                && !error.is::<ControllerApprovalRequired>()
                 && !error.is::<crate::session::frontend::RelayAdmissionDenial>()
         })
 }
@@ -3100,8 +3102,18 @@ where
         }
     };
     authorize_proposal(server, principal, &provider, &subject)
-        .map_err(|e| Box::new(relay::PermanentFailure(e.to_string())) as crate::Error)
 }
+
+#[derive(Debug)]
+struct ControllerApprovalRequired(String);
+
+impl std::fmt::Display for ControllerApprovalRequired {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for ControllerApprovalRequired {}
 
 fn authorize_proposal(
     server: &str,
@@ -3109,10 +3121,25 @@ fn authorize_proposal(
     provider: &str,
     subject: &str,
 ) -> crate::Result<()> {
-    let handle = crate::server_endpoint::allow_handle_for_server(principal, server)?;
-    let decision = controller_accounts::admit_resolved_target(server, provider, subject, &handle)?;
+    let handle = crate::server_endpoint::allow_handle_for_server(principal, server)
+        .map_err(|error| relay::PermanentFailure(error.to_string()))?;
+    let decision = controller_accounts::admit_resolved_target(server, provider, subject, &handle)
+        .map_err(|error| relay::PermanentFailure(error.to_string()))?;
     if !decision.permits_target() {
-        return Err(format!("controller {provider} {subject} on {server} needs local approval; see ssmcp controllers").into());
+        let principal = crate::server_endpoint::allow_principal(&handle, server)?;
+        let target = if principal.contains('[') {
+            format!("\"{principal}\"")
+        } else {
+            principal
+        };
+        let command = format!("ssmcp controllers approve {target}");
+        let mut message = String::new();
+        zi18n::format_to(
+            &mut message,
+            terminal::locale::text("controllers.approval_required"),
+            &[zi18n::Argument::new("command", &command)],
+        )?;
+        return Err(ControllerApprovalRequired(message).into());
     }
     Ok(())
 }
@@ -4664,7 +4691,9 @@ pub fn report_error(error: &str) {
 
 /// Report a CLI failure unless its diagnostic was already written as a tool result.
 pub fn report_run_error(error: &(dyn std::error::Error + 'static)) {
-    if !error.is::<computer_control::ReportedOperationError>() {
+    if let Some(approval) = error.downcast_ref::<ControllerApprovalRequired>() {
+        render::actionable_error("ssmcp", &approval.0);
+    } else if !error.is::<computer_control::ReportedOperationError>() {
         report_error(&error.to_string());
     }
 }
@@ -5246,6 +5275,10 @@ mod tests {
         assert!(!watchdog_retries(false, Some(&disconnected)));
         assert!(watchdog_retries(true, None));
         assert!(!watchdog_retries(true, Some(&UnsupportedWireProtocol)));
+        assert!(!watchdog_retries(
+            true,
+            Some(&ControllerApprovalRequired("approval required".into()))
+        ));
         assert!(!watchdog_retries(
             true,
             Some(&relay::PermanentFailure("rejected".into()))

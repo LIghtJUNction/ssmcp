@@ -10,6 +10,18 @@ const EN: &[Message<'static>] = &[
         "server update required for queue",
     ),
     Message::text("connection.online", "connected"),
+    Message::text(
+        "controllers.approval_required",
+        "Adding another controller requires explicit approval on this device. Run `{command}`",
+    ),
+    Message::text(
+        "controllers.unknown_target",
+        "No recorded controller matches this username and server. Connect to it first or choose the exact identity from ssmcp controllers.",
+    ),
+    Message::text(
+        "controllers.ambiguous_target",
+        "Multiple controller identities used this username on this server. Choose the exact identity from ssmcp controllers.",
+    ),
     Message::text("shell.preview", "Preview has no live shell to change."),
     Message::text("shell.pending", "Checking shell preference"),
     Message::text("shell.current", "Current shell"),
@@ -32,6 +44,18 @@ const ZH: &[Message<'static>] = &[
     Message::text("connection.offline", "未连接"),
     Message::text("connection.queue_update", "队列需要更新服务端"),
     Message::text("connection.online", "已连接"),
+    Message::text(
+        "controllers.approval_required",
+        "添加其他控制者需要在这台设备上显式授权。请运行 `{command}`",
+    ),
+    Message::text(
+        "controllers.unknown_target",
+        "本机没有该中继用户名的记录。请先尝试连接该账号，或从 ssmcp controllers 选择完整身份。",
+    ),
+    Message::text(
+        "controllers.ambiguous_target",
+        "该中继用户名对应多个已记录身份。请从 ssmcp controllers 选择完整身份。",
+    ),
     Message::text("shell.preview", "预览没有可切换的 shell。"),
     Message::text("shell.pending", "正在检查 shell 偏好"),
     Message::text("shell.current", "当前 shell"),

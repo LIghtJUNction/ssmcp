@@ -129,6 +129,15 @@ ssmcp alice@relay.example.com --name dev --title "开发与测试"
 
 把 `alice` 换成控制者在该中继登记的用户名。设备从当前项目目录主动建立 HTTPS/WSS 连接，接受该账号获准的操作。账号登录在控制者的浏览器完成。下次从终端连接时，仍需输入 `ssmcp 用户名@中继服务器`。
 
+在同一台设备上尝试连接第二个控制者时，SSMCP 会提示这种连接需要本地显式授权，并给出对应命令。在被控设备的终端运行提示中的命令，核对显示的账号并输入 `yes`，然后重新连接。
+
+```sh
+ssmcp controllers approve lightjunction@ssmcp.lmm.best
+ssmcp controllers revoke lightjunction@ssmcp.lmm.best
+```
+
+`lightjunction@ssmcp.lmm.best` 仅为示例。请替换为你要授权或撤销的中继账号。批准后，重新连接即可让该账号控制为它开启的会话。
+
 完整步骤见[账号与设备](docs/client-accounts.md)和[默认服务器与可信公钥](docs/client-server.md)。
 
 ### 3. 接入 MCP

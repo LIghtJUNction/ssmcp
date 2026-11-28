@@ -16,6 +16,8 @@
 | `ssmcp attach --read-only TARGET` | 旁观本机会话 |
 | `ssmcp controllers list --json` | 查看本机记录的控制者身份和批准状态 |
 | `ssmcp controllers history --json` | 按序查看本机保存的控制访问与批准记录 |
+| `ssmcp controllers approve USERNAME@SERVER` | 在被控设备上显式批准已记录的控制者 |
+| `ssmcp controllers revoke USERNAME@SERVER` | 在被控设备上撤销已记录的控制者批准 |
 
 授权名单中的用户名须已在目标服务器登记。设备名称与工作目录用于辨认连接。[用户名](named-accounts.md) · [账号与设备](client-accounts.md)
 

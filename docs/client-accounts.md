@@ -24,11 +24,15 @@ ssmcp alice@relay.example
 
 设备在本机记录由中继验证的控制账号。身份由中继地址、身份提供方和稳定账号 ID 组成；登录名只用于显示。首次连接时，为本机明确选择、已由中继解析的目标预留位置。首次经中继验证的控制操作确认其默认身份。设备保留后续不同账号的记录，等待本机操作者批准。
 
-在设备终端运行 `ssmcp controllers list --json` 查看身份、状态和时间。仅完成中继用户名解析时，`first_verified` 为空；收到归属已验证的控制操作后，该字段记录观察时间。摘要时间按分钟合并。运行 `ssmcp controllers history --json` 可按序号查看最近 256 条事件，区分目标解析、每条真实连接上控制者首次获准或被拒、以及本机批准和撤销。同一账号在同一连接连续执行工具只记录一次访问。新连接或准入结果变化会产生新的访问记录。升级已有的汇总记录时会保留原批准状态和时间摘要，逐条访问记录从新版本观察到的事件开始。选择具体账号时，请使用列表中的三个完整身份字段。
+在设备终端运行 `ssmcp controllers list --json` 查看身份、状态和时间。仅完成中继用户名解析时，`first_verified` 为空；收到归属已验证的控制操作后，该字段记录观察时间。摘要时间按分钟合并。运行 `ssmcp controllers history --json` 可按序号查看最近 256 条事件，区分目标解析、每条真实连接上控制者首次获准或被拒、以及本机批准和撤销。同一账号在同一连接连续执行工具只记录一次访问。新连接或准入结果变化会产生新的访问记录。升级已有的汇总记录时会保留原批准状态和时间摘要，逐条访问记录从新版本观察到的事件开始。
+
+尝试连接第二个中继账号后，SSMCP 会在被控设备上给出对应的批准命令。可以用已记录的 `用户名@中继` 批准或撤销。如果该名称对应多个已观察身份，或记录里只有 GitHub 登录名，请使用列表中的中继地址、身份提供方和稳定账号 ID。
 
 ~~~sh
 ssmcp controllers list --json
 ssmcp controllers history --json
+ssmcp controllers approve bob@relay.example
+ssmcp controllers revoke bob@relay.example
 ssmcp controllers approve https://relay.example github 12345
 ssmcp controllers revoke https://relay.example github 12345
 ~~~

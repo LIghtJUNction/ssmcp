@@ -137,6 +137,50 @@ fn authenticated_relay_preflight_reserves_only_one_target_without_a_false_sign_i
 }
 
 #[test]
+fn controller_target_matches_the_recorded_relay_handle_and_fails_on_ambiguity() {
+    use crate::client::controller_command::resolve_controller;
+
+    let fixture = Fixture::new();
+    let record = |relay, subject, target| {
+        observe_at(
+            &fixture.0,
+            relay,
+            "github",
+            subject,
+            10,
+            Observation::Target(target),
+        )
+        .unwrap()
+    };
+    record(RELAY, "42", "team-owner");
+    assert_eq!(record(RELAY, "76", "teammate"), Decision::Pending);
+    record("https://other.example", "52", "teammate");
+    verified(&fixture.0, RELAY, &account("76", "github-login"), 11).unwrap();
+    let select = |target: &[&str]| resolve_controller(fixture.entries(), target);
+    let entry = select(&["TeamMate@RELAY.EXAMPLE:443"]).unwrap();
+    assert_eq!(entry.subject, "76");
+    assert!(select(&["github-login@relay.example"]).is_err());
+    assert_eq!(select(&["teammate@other.example"]).unwrap().subject, "52");
+    for (approve, status) in [(true, Decision::Approved), (false, Decision::Revoked)] {
+        assert_eq!(
+            decide_at(
+                &fixture.0,
+                &entry.relay,
+                &entry.provider,
+                &entry.subject,
+                approve
+            )
+            .unwrap()
+            .status,
+            status
+        );
+    }
+    record(RELAY, "102", "teammate");
+    assert!(select(&["teammate@relay.example"]).is_err());
+    assert_eq!(select(&[RELAY, "github", "102"]).unwrap().subject, "102");
+}
+
+#[test]
 fn journal_distinguishes_connections_and_decisions_and_coalesces_tool_calls() {
     let f = Fixture::new();
     let a = account("42", "alice");

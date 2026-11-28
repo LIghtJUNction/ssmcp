@@ -2189,7 +2189,8 @@ impl Renderer {
             return Ok(());
         }
         if v["type"] == "ssmcp.status" {
-            let interactive = self.dashboard_active || io::stderr().is_terminal();
+            let interactive =
+                v["actionable"] != true && (self.dashboard_active || io::stderr().is_terminal());
             return self.status_summary(
                 out,
                 label,
@@ -2838,6 +2839,13 @@ pub(crate) fn status(label: &str, level: &str, message: &str) {
     event(
         label,
         &json!({"type":"ssmcp.status","level":level,"message":message}),
+    );
+}
+
+pub(super) fn actionable_error(label: &str, message: &str) {
+    event(
+        label,
+        &json!({"type":"ssmcp.status","level":"Error","message":message,"actionable":true}),
     );
 }
 
@@ -4392,6 +4400,22 @@ mod tests {
                 assert!(unicode_width::UnicodeWidthStr::width(text.trim_end()) <= width);
             }
         }
+    }
+
+    #[test]
+    fn actionable_errors_keep_copyable_commands_on_narrow_terminals() {
+        let mut renderer = Renderer::new(false, false, 40);
+        renderer.dashboard_active = true;
+        let command = "ssmcp controllers approve another-user@relay.example";
+        let mut out = Vec::new();
+        renderer
+            .event(
+                &mut out,
+                "ssmcp",
+                &json!({"type":"ssmcp.status","level":"Error","message":command,"actionable":true}),
+            )
+            .unwrap();
+        assert_eq!(out, format!("[ERR ] ssmcp {command}\n").as_bytes());
     }
 
     #[test]
