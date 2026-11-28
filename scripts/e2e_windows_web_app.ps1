@@ -169,5 +169,20 @@ try {
         $process.Dispose()
     }
     $report | ConvertTo-Json -Depth 4 | Set-Content -Encoding utf8 -LiteralPath (Join-Path $evidence.FullName 'result.json')
-    if (Test-Path $fixture) { Remove-Item -LiteralPath $fixture -Recurse -Force }
+    # Edge helpers can briefly keep files open after the app windows close.
+    # Only stop helpers still using this test's private profiles.
+    $helpers = @(Get-CimInstance Win32_Process -Filter "Name='msedge.exe'" |
+        Where-Object { $_.CommandLine -like "*$fixture*" })
+    foreach ($helper in $helpers) {
+        Stop-Process -Id $helper.ProcessId -ErrorAction SilentlyContinue
+    }
+    $cleanup = [Diagnostics.Stopwatch]::StartNew()
+    while (Test-Path $fixture) {
+        try {
+            Remove-Item -LiteralPath $fixture -Recurse -Force
+        } catch {
+            if ($cleanup.Elapsed.TotalSeconds -ge 8) { throw }
+            Start-Sleep -Milliseconds 250
+        }
+    }
 }
