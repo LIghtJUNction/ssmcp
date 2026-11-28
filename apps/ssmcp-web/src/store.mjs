@@ -1,3 +1,4 @@
+import { t } from './locale.mjs';
 import { byteLength, compareCounters } from './protocol.mjs';
 import { redact } from './presentation.mjs';
 
@@ -50,10 +51,10 @@ export class Timeline {
 export class CommandLedger {
   constructor(limit = 64) { this.limit = limit; this.records = []; }
   add(record) {
-    if (this.records.some(item => item.requestId === record.requestId)) throw new Error('请求 ID 已存在；不能重复派发命令。');
+    if (this.records.some(item => item.requestId === record.requestId)) throw new Error(t('duplicateRequestId'));
     if (this.records.length >= this.limit) {
       const removable = this.records.findIndex(item => ['confirmed', 'rejected'].includes(item.status));
-      if (removable < 0) throw new Error('待确认操作已达到内存上限。请先核对现有请求。');
+      if (removable < 0) throw new Error(t('pendingCommandsFull'));
       this.records.splice(removable, 1);
     }
     this.records.push({ ...record, status: 'sending' });
@@ -61,7 +62,7 @@ export class CommandLedger {
   }
   update(requestId, patch) {
     const record = this.records.find(item => item.requestId === requestId);
-    if (!record) throw new Error('找不到原始命令记录。');
+    if (!record) throw new Error(t('unknownCommandRecord'));
     const safe = redact(patch);
     if (safe.receipt && byteLength(safe.receipt) > 8192) {
       safe.receipt = { truncated: true, preview: JSON.stringify(safe.receipt).slice(0, 8192) };

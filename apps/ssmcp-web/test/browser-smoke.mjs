@@ -21,7 +21,7 @@ let browser;
 try {
   await new Promise((resolve, reject) => { server.stdout.once('data', resolve); server.once('error', reject); server.once('exit', code => reject(new Error(`Static server exited: ${code}`))); });
   browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined, headless: true, args: ['--no-sandbox'] });
-  const page = await browser.newPage({ viewport: { width: 1365, height: 900 } });
+  const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1365, height: 900 } });
   const foreground = 'live:' + '71'.repeat(16);
   let newCount = 0, activeTarget = foreground, cwd = '/fixture/project';
   let connectionGate;
@@ -571,7 +571,7 @@ try {
   assert.equal(requests.some(request => JSON.stringify(request.body).includes(token)), false);
   assert.equal(commands.some(item => item.operation.command === 'terminal.resize'), false, 'viewport changes are not terminal commands');
   // Only the Magisk build marks its loopback landing document.
-  const moduleTab = await browser.newPage();
+  const moduleTab = await browser.newPage({ locale: 'zh-CN' });
   const moduleHome = 'http://127.0.0.1:42387/';
   const bootstrapRequests = [];
   let loginApproved = false;
@@ -624,6 +624,7 @@ try {
   assert.equal(await moduleTab.locator('#workbench-shell').isVisible(), false);
   await moduleTab.close();
   const mobile = await browser.newPage({
+    locale: 'zh-CN',
     viewport:{width:320,height:640},
     userAgent:'Mozilla/5.0 (Linux; Android 14; Fixture Build/TOY; wv) AppleWebKit/537.36 Version/4.0 Chrome/120.0 Mobile Safari/537.36'
   });
@@ -642,7 +643,7 @@ try {
   assert.equal(await mobile.locator('#launch-form').isVisible(), false);
   assert.equal(mobileApiCalls, 0);
   await mobile.close();
-  const setup = await browser.newPage({viewport:{width:390,height:844}});
+  const setup = await browser.newPage({locale:'zh-CN',viewport:{width:390,height:844}});
   const readResults = [];
   let launchResult = { status: 200, json: { status: 'ready' } };
   await setup.route('**/api/gui/v1/**', async route => {
@@ -774,6 +775,27 @@ try {
   assert.doesNotMatch(await launchError.textContent(), /流量不足/);
   assert.equal(refusedCreates, 6);
   await setup.close();
+
+  for (const locale of ['en-GB', 'fr-FR']) {
+    const localized = await browser.newPage({ locale, viewport: { width: 390, height: 844 } });
+    const localizationErrors = [];
+    localized.on('pageerror', error => localizationErrors.push(error.message));
+    await localized.route('**/api/gui/v1/owned-sessions', route => route.fulfill({
+      status: 401, json: { error: { code: 'denied', effect: 'none', message: 'gateway pairing is required' } },
+    }));
+    await localized.goto(`http://127.0.0.1:${port}/?setup=1#${token}`);
+    await localized.getByRole('heading', { name: 'Connect to a session' }).waitFor();
+    assert.equal(await localized.locator('html').getAttribute('lang'), 'en');
+    await localized.getByLabel('Username').fill('fixture-account');
+    await localized.getByLabel('Relay address').fill('relay.example');
+    await localized.getByRole('checkbox', { name: /can control the session, run commands/ }).waitFor();
+    await confirmLaunch(localized);
+    await localized.getByRole('button', { name: 'Connect', exact: true }).click();
+    await localized.getByRole('alert').filter({ hasText: /Pair with the local gateway again/ }).waitFor();
+    assert.equal(await localized.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    assert.deepEqual(localizationErrors, []);
+    await localized.close();
+  }
   process.stdout.write('Browser fixture smoke passed: CSP, protocol envelopes, IME/focus, bounded DOM, scroll continuity, queue receipt, five right-aligned input origins, original-ID quote button/selected excerpt/R shortcut, preserved multiline draft and ordinary quoted delivery, unknown command, mobile panels.\n');
 } finally {
   if (browser) await browser.close();

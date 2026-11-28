@@ -1187,6 +1187,7 @@ async fn serve_asset(state: Arc<Gateway>, path: String) -> Response {
             "src/client.mjs",
             "src/gateway.mjs",
             "src/gateway-feedback.mjs",
+            "src/locale.mjs",
             "src/presentation.mjs",
             "src/protocol.mjs",
             "src/store.mjs",

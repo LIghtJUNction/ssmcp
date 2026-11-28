@@ -1,3 +1,4 @@
+import { formatList, t } from './locale.mjs';
 import {
   BridgeError, ProtocolError, createRequest, requestId, unwrapResponse,
   validateResponse, validateObservation, counter, identifier,
@@ -8,14 +9,14 @@ import { Timeline, CommandLedger } from './store.mjs';
 const supported = ['runtime', 'terminals', 'workers', 'threads', 'chat.queue', 'time'];
 const paged = new Set(['workers', 'threads', 'chat.queue']);
 const pauseCodes = new Set(['denied', 'closed', 'authentication_required', 'unsupported_version', 'traffic_quota_exceeded', 'online_session_limit']);
-const readTimeout = () => Object.assign(new Error('读取状态的 55 秒窗口已结束，尚未完成同步。'), { code: 'read_window_timeout' });
+const readTimeout = () => Object.assign(new Error(t('stateReadTimedOut')), { code: 'read_window_timeout' });
 
 export function abortableDelay(ms, signal) {
   return new Promise((resolve, reject) => {
-    if (signal?.aborted) { reject(new DOMException('观察已暂停。', 'AbortError')); return; }
+    if (signal?.aborted) { reject(new DOMException(t('observationAborted'), 'AbortError')); return; }
     const timer = setTimeout(done, ms);
     function done() { signal?.removeEventListener('abort', abort); resolve(); }
-    function abort() { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(new DOMException('观察已暂停。', 'AbortError')); }
+    function abort() { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(new DOMException(t('observationAborted'), 'AbortError')); }
     signal?.addEventListener('abort', abort, { once: true });
   });
 }
@@ -41,20 +42,20 @@ export class BridgeClient {
   context() { return { connection: this.connection?.connection_id, generation: this.generation, epoch: this.epoch }; }
   current(context) { return context.epoch === this.epoch && context.connection === this.connection?.connection_id && context.generation === this.generation; }
   notice(text, metadata = {}) {
-    this.timeline.put({ id: this.makeId('notice'), kind: 'notice', title: '观察记录', text, generation: this.generation, metadata });
+    this.timeline.put({ id: this.makeId('notice'), kind: 'notice', title: t('observationLog'), text, generation: this.generation, metadata });
     this.emit('timeline');
   }
   connectionRecord(record) {
     if (this.connectionRecords.length >= 32) {
       const index = this.connectionRecords.findIndex(item => ['confirmed', 'rejected'].includes(item.status));
-      if (index < 0) throw new Error('未确定连接请求已达到内存上限，请先核对原始连接 ID。');
+      if (index < 0) throw new Error(t('pendingConnectionsFull'));
       this.connectionRecords.splice(index, 1);
     }
     this.connectionRecords.push(record);
     return record;
   }
   checkRead(signal) {
-    if (signal?.aborted) throw new DOMException('读取已取消。', 'AbortError');
+    if (signal?.aborted) throw new DOMException(t('readCanceled'), 'AbortError');
     if (signal) this.readChecks.get(signal)?.();
   }
   async readWindow(action, { signal = this.reads.signal, maximumMs = 55_000, deadline = this.clock() + Math.min(maximumMs, 55_000) } = {}) {
@@ -65,7 +66,7 @@ export class BridgeClient {
     let expired = false, timer;
     const check = () => {
       if (expired || this.clock() >= deadline) throw readTimeout();
-      if (controller.signal.aborted) throw new DOMException('读取已取消。', 'AbortError');
+      if (controller.signal.aborted) throw new DOMException(t('readCanceled'), 'AbortError');
     };
     try {
       check();
@@ -81,7 +82,7 @@ export class BridgeClient {
   }
 
   async connect(session, readOnly = true) {
-    if (this.connection || this.status === 'connecting') throw new Error('请先关闭当前前端连接。');
+    if (this.connection || this.status === 'connecting') throw new Error(t('closeCurrentConnection'));
     const attempt = this.connectionRecord({ requestId: this.makeId('connect'), operation: 'open', session, readOnly, status: 'sending' });
     const epoch = ++this.epoch;
     this.timeline.clear(); this.history = null; this.pendingObservation = null;
@@ -90,7 +91,7 @@ export class BridgeClient {
     this.emit('status');
     try {
       const result = await this.transport.open({ request_id: this.openAttempt.requestId, session, read_only: readOnly });
-      if (epoch !== this.epoch) throw new Error('连接选择已变化。');
+      if (epoch !== this.epoch) throw new Error(t('connectionSelectionChanged'));
       this.connection = result;
       this.openAttempt.connectionId = result.connection_id;
       this.openAttempt.status = 'confirmed';
@@ -115,28 +116,28 @@ export class BridgeClient {
 
   async handshake(signal = this.reads.signal) {
     this.checkRead(signal);
-    if (!this.connection) throw new Error('尚未连接会话。');
+    if (!this.connection) throw new Error(t('noCurrentSession'));
     const connectionId = this.connection.connection_id;
     const epoch = this.epoch;
     const request = createRequest({ op: 'capabilities' }, this.makeId('caps'));
     const response = await this.transport.bridge(connectionId, request, { signal });
     this.checkRead(signal);
     const caps = unwrapResponse(response, request);
-    if (caps.application !== 'ssmcp') throw new ProtocolError('这个网关连接不是 SSMCP。');
+    if (caps.application !== 'ssmcp') throw new ProtocolError(t('invalidGatewayApp'));
     if (epoch !== this.epoch || connectionId !== this.connection?.connection_id) return;
-    if (this.connection.read_only && caps.mode !== 'observe') throw new ProtocolError('只读连接返回了控制能力。');
+    if (this.connection.read_only && caps.mode !== 'observe') throw new ProtocolError(t('unexpectedControl'));
     const changed = this.generation !== null && this.generation !== response.generation;
     this.generation = response.generation; this.capabilities = caps;
     if (changed) {
       this.cursor = null; this.history = null; this.pendingObservation = null; this.states.clear(); this.stateErrors.clear(); this.queries.clear(); this.timeline.clear();
-      this.notice('后端代次已变化，已重新读取当前状态。旧请求的结果保留在操作记录中。');
+      this.notice(t('backendChanged'));
     }
     this.emit('capabilities');
   }
 
   async readState(resource, query = {}, { signal = this.reads.signal, apply = true } = {}) {
     this.checkRead(signal);
-    if (!this.hasResource(resource)) throw new Error(`当前连接没有 ${resource} 资源。`);
+    if (!this.hasResource(resource)) throw new Error(t('missingResource', resource));
     const context = this.context();
     const serial = (this.resourceReads.get(resource) ?? 0) + 1;
     this.resourceReads.set(resource, serial);
@@ -145,15 +146,15 @@ export class BridgeClient {
     const response = await this.transport.bridge(context.connection, request, { signal });
     this.checkRead(signal);
     const body = unwrapResponse(response, request);
-    if (body.schema_version !== 1) throw new ProtocolError('状态 schema 版本不受支持。');
-    if (!this.current(context) || this.resourceReads.get(resource) !== serial) throw new DOMException('状态读取已被较新请求替代。', 'AbortError');
+    if (body.schema_version !== 1) throw new ProtocolError(t('unsupportedStateSchema'));
+    if (!this.current(context) || this.resourceReads.get(resource) !== serial) throw new DOMException(t('supersededStateRead'), 'AbortError');
     if (apply) {
       this.states.set(resource, body.value); this.stateErrors.delete(resource); this.queries.set(resource, query);
       if (resource === 'chat.queue' && Array.isArray(body.value?.items)) {
         for (const item of body.value.items.slice(0, 32)) {
           if (typeof item.id !== 'string' || typeof item.text !== 'string') continue;
           this.timeline.put({ id: `queue:${context.generation}:${item.id}`, generation: context.generation,
-            kind: 'input', title: '用户', messageId: item.id, inputSide: true, inputOrigin: 'human',
+            kind: 'input', title: t('user'), messageId: item.id, inputSide: true, inputOrigin: 'human',
             text: item.text.slice(0, 16384), status: item.uncertain ? 'unknown' : item.status,
             source: { kind: 'local_queue' }, metadata: item });
         }
@@ -164,7 +165,7 @@ export class BridgeClient {
           if (typeof slot.task_id !== 'string' || !slot.task_id) continue;
           const progress = typeof slot.progress === 'string' ? slot.progress : slot.progress ? JSON.stringify(slot.progress) : '';
           this.timeline.put({ id: `worker-task:${context.generation}:${body.value.pool_generation}:${slot.task_id}`,
-            generation: context.generation, kind: 'worker_snapshot', title: `Worker 任务快照 · 站点 ${slot.slot}`,
+            generation: context.generation, kind: 'worker_snapshot', title: t('workerTaskSnapshot', slot.slot),
             text: [slot.task_summary || slot.task_id, progress].filter(Boolean).join('\n').slice(0, 8192),
             status: slot.state, source: { kind: 'worker_snapshot' },
             metadata: { snapshot: true, pool_generation: body.value.pool_generation, ...slot } });
@@ -184,7 +185,7 @@ export class BridgeClient {
     if (this.hasResource('runtime')) {
       try {
         const runtime = await this.readState('runtime', {}, { signal });
-        counter(runtime.live_cursor, '当前事件游标');
+        counter(runtime.live_cursor, t('eventCursor'));
         if (this.cursor === null && this.current(context)) this.cursor = runtime.live_cursor;
       } catch (error) {
         if (!this.current(context)) return;
@@ -241,7 +242,7 @@ export class BridgeClient {
   }
 
   startObservation() {
-    if (!this.connection || !this.capabilities) throw new Error('尚未连接会话。');
+    if (!this.connection || !this.capabilities) throw new Error(t('noCurrentSession'));
     if (!this.capabilities.events) { this.observation = 'unsupported'; this.emit('status'); return Promise.resolve(); }
     if (this.observerPromise) return this.observerPromise;
     const controller = new AbortController(); this.observer = controller;
@@ -270,7 +271,7 @@ export class BridgeClient {
       try {
         const { page, rows } = await this.readWindow(async (cycleSignal, check) => {
           const page = held?.page ?? validateObservation(await this.transport.observe(context.connection, request, { signal: cycleSignal }), request);
-          if (!this.current(context)) throw new DOMException('已切换连接。', 'AbortError');
+          if (!this.current(context)) throw new DOMException(t('switchedConnections'), 'AbortError');
           // Keep a verified page before checking cancellation or a deadline that
           // raced its arrival. A later cycle reconciles this same page.
           this.pendingObservation = { context, request, page };
@@ -288,7 +289,7 @@ export class BridgeClient {
         if (!this.current(context) || signal.aborted) break;
         if (this.clock() >= deadline) throw readTimeout();
         if (page.retention_gap) {
-          this.notice('事件保留窗口已移动。已刷新权威状态；缺失的事件不会被补造成成功结果。', {
+          this.notice(t('eventRetentionMoved'), {
             requested_cursor: request.cursor, start_cursor: page.start_cursor,
           });
         }
@@ -331,7 +332,7 @@ export class BridgeClient {
   }
 
   async command(command, arguments_) {
-    if (!this.hasCommand(command)) throw new Error('当前连接没有这个控制能力。');
+    if (!this.hasCommand(command)) throw new Error(t('missingControl'));
     const context = this.context(); const id = this.makeId('command');
     const args = command === 'chat.send' ? { target: 'next', ...arguments_, request_id: id } : arguments_;
     const request = createRequest({ op: 'command', generation: context.generation, command, arguments: args }, id);
@@ -343,16 +344,16 @@ export class BridgeClient {
       const value = unwrapResponse(response, request);
       if (command === 'chat.send' && (value.value?.request_id !== id || value.value?.target !== args.target
           || value.value?.confirmation !== 'local_queue_admission' || typeof value.value?.message_id !== 'string'
-          || typeof value.value?.duplicate !== 'boolean' || typeof value.value?.status !== 'string')) throw new ProtocolError('输入队列回执与原提交不匹配。', 'response_mismatch');
-      if (command === 'chat.send') identifier(value.value.message_id, '输入消息 ID');
+          || typeof value.value?.duplicate !== 'boolean' || typeof value.value?.status !== 'string')) throw new ProtocolError(t('chatReceiptMismatch'), 'response_mismatch');
+      if (command === 'chat.send') identifier(value.value.message_id, t('inputMessageId'));
       if (command === 'session.access' && (!Array.isArray(value.value?.entries) || !value.value.entries.length
           || value.value.entries.some(entry => typeof entry?.principal !== 'string' || typeof entry?.subject !== 'string'))) {
-        throw new ProtocolError('服务器返回的会话权限清单无效。', 'response_mismatch');
+        throw new ProtocolError(t('invalidSessionAccessList'), 'response_mismatch');
       }
       const nativeUnknown = ['unknown', 'uncertain'].includes(value.value?.status)
         || value.value?.uncertain === true || value.value?.effect === 'may_have_occurred';
       this.ledger.update(id, { status: nativeUnknown ? 'unknown' : 'confirmed', receipt: value.value,
-        ...(nativeUnknown ? { error: { code: 'unknown', message: '原生回执仍报告结果未确定。', effect: 'may_have_occurred' } } : {}) });
+        ...(nativeUnknown ? { error: { code: 'unknown', message: t('nativeResultUnknown'), effect: 'may_have_occurred' } } : {}) });
     } catch (error) {
       const rejected = (error instanceof BridgeError || typeof error.effect === 'string') && error.effect === 'none';
       this.ledger.update(id, { status: rejected ? 'rejected' : 'unknown', error: {
@@ -361,11 +362,11 @@ export class BridgeClient {
       } });
     }
     if (this.current(context)) {
-      let text = record.status === 'confirmed' ? command === 'chat.send' ? '已收到本地输入队列的入队回执。' : '已收到原生操作回执。'
-        : record.status === 'unknown' ? '结果未确定。保留此请求 ID，并核对实际状态；不会自动重发。' : record.error.message;
+      let text = record.status === 'confirmed' ? command === 'chat.send' ? t('inputAccepted') : t('nativeReceiptReceived')
+        : record.status === 'unknown' ? t('commandOutcomeUnknown') : record.error.message;
       if (record.status === 'confirmed' && command === 'session.access') {
-        const accounts = record.receipt.entries.map(entry => entry.principal + (entry.owner ? '（所有者）' : ''));
-        text = '当前会话的控制者：' + accounts.join('、');
+        const accounts = record.receipt.entries.map(entry => entry.principal + (entry.owner ? t('controllerOwner') : ''));
+        text = t('controllersPrefix') + formatList(accounts);
       }
       this.timeline.put({ id: `command:${id}`, generation: context.generation, kind: 'receipt', title: command,
         text, status: record.status, metadata: record });

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,interactive-widget=resizes-content">
@@ -14,199 +14,195 @@
     <form id="launch-form" aria-labelledby="launch-title">
       <header class="launch-heading">
         <div class="brand-lockup"><span class="brand-sign" aria-hidden="true"></span><strong>ssmcp</strong></div>
-        <h1 id="launch-title">连接会话</h1>
+        <h1 data-i18n-text="connectSession" id="launch-title">Connect to a session</h1>
       </header>
-      <label class="launch-field"><span>用户名</span>
+      <label class="launch-field"><span data-i18n-text="username">Username</span>
         <input id="launch-name" name="username" required maxlength="32" autocomplete="username" autocapitalize="none" spellcheck="false" enterkeyhint="next">
       </label>
-      <label class="launch-field"><span>服务器地址</span>
+      <label class="launch-field"><span data-i18n-text="serverAddress">Relay address</span>
         <input id="launch-relay" name="server" value="ssmcp.lmm.best" required autocomplete="off" autocapitalize="none" spellcheck="false" inputmode="url" enterkeyhint="go">
       </label>
-      <p class="launch-registration">没有中继账号？填写任意可用的用户名，在下一步登录并注册。<br>
-        <span lang="en">Need a relay account? Choose any available username, then sign in to register it.</span>
+      <p data-i18n-text="relayRegistration" class="launch-registration">Need a relay account? Choose an available username, then sign in to register it.
       </p>
       <fieldset class="launch-confirmations">
-        <legend>连接前确认 <span lang="en">Before connecting</span></legend>
-        <label><input id="launch-account-confirmed" type="checkbox" required><span>
-          1. 这是我的账号，或我明确许可的朋友的账号。<br>
-          <span lang="en">This is my account or a friend's account I explicitly allow.</span>
+        <legend data-i18n-text="beforeConnecting">Before connecting</legend>
+        <label><input id="launch-account-confirmed" type="checkbox" required><span data-i18n-text="confirmAccount">
+          1. This is my account or a friend’s account I explicitly allow.
         </span></label>
         <label><input id="launch-control-confirmed" type="checkbox" required>
-          <span id="launch-device-risk">2. 我了解该账号可控制会话、运行命令并访问会话可读的文件。<br>
-            <span lang="en">I understand this account can control the session, run commands and access files available to it.</span></span>
-          <span id="launch-chat-risk" hidden>2. 我了解该账号可控制聊天会话、读取和发送消息。<br>
-            <span lang="en">I understand this account can control the chat session and read and send messages.</span></span>
+          <span data-i18n-text="confirmDeviceControl" id="launch-device-risk">2. I understand this account can control the session, run commands, and access files available to the session.</span>
+          <span data-i18n-text="confirmChatControl" id="launch-chat-risk" hidden>2. I understand this account can control the chat session and read and send messages.</span>
         </label>
       </fieldset>
       <div id="launch-hosted" class="launch-consent" hidden>
-        <label><input id="launch-terms" type="checkbox"> 我同意<a href="https://ssmcp.lmm.best/legal/terms" target="_blank" rel="noopener noreferrer">用户协议</a></label>
-        <label><input id="launch-privacy" type="checkbox"> 我同意<a href="https://ssmcp.lmm.best/legal/privacy" target="_blank" rel="noopener noreferrer">隐私政策</a></label>
+        <label data-i18n-text="agreeTo"><input id="launch-terms" type="checkbox"> I agree to the <a data-i18n-text="termsOfService" href="https://ssmcp.lmm.best/legal/terms" target="_blank" rel="noopener noreferrer">Terms of Service</a></label>
+        <label data-i18n-text="agreeTo"><input id="launch-privacy" type="checkbox"> I agree to the <a data-i18n-text="privacyPolicy" href="https://ssmcp.lmm.best/legal/privacy" target="_blank" rel="noopener noreferrer">Privacy Policy</a></label>
       </div>
-      <button class="primary" type="submit" id="launch-connect">连接</button>
-      <p id="device-login" role="status" hidden><a id="device-login-link" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">登录中继并授权这台设备</a><br>核对验证码 <strong id="device-login-code"></strong></p>
+      <button data-i18n-text="connect" class="primary" type="submit" id="launch-connect">Connect</button>
+      <p data-i18n-text="verifyCode" id="device-login" role="status" hidden><a data-i18n-text="authorizeDevice" id="device-login-link" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">Sign in to the relay and authorize this device</a><br>Match this verification code: <strong id="device-login-code"></strong></p>
       <p class="form-error" id="launch-error" role="alert"></p>
       <p class="tiny mono" id="launch-request-id" hidden></p>
-      <button type="button" class="text-button" id="launch-back" hidden>返回工作台</button>
+      <button data-i18n-text="backToWorkbench" type="button" class="text-button" id="launch-back" hidden>Back to workbench</button>
     </form>
   </main>
   <main class="launch-setup" id="launch-entry" hidden>
     <div class="entry-content"><div class="brand-lockup"><span class="brand-sign" aria-hidden="true"></span><strong>ssmcp</strong></div><p id="entry-hint" role="status"></p></div>
   </main>
   <div class="shell" id="workbench-shell" hidden>
-    <aside class="sidebar" id="sidebar" aria-label="会话导航">
-      <div class="brand"><div class="brand-lockup"><span class="brand-sign" aria-hidden="true"></span><strong>ssmcp</strong></div><button class="icon-button close-menu" id="close-menu" aria-label="关闭侧边栏">×</button></div>
+    <aside data-i18n-aria-label="sessionNavigation" class="sidebar" id="sidebar" aria-label="Session navigation">
+      <div class="brand"><div class="brand-lockup"><span class="brand-sign" aria-hidden="true"></span><strong>ssmcp</strong></div><button data-i18n-aria-label="closeSidebar" class="icon-button close-menu" id="close-menu" aria-label="Close sidebar">×</button></div>
       <div class="sidebar-navigation">
-        <div class="nav-heading"><span>会话</span><button class="icon-button" id="refresh-sessions" title="刷新会话" aria-label="刷新会话">↻</button></div>
+        <div class="nav-heading"><span data-i18n-text="sessions">Sessions</span><button data-i18n-title="refreshSessions" data-i18n-aria-label="refreshSessions" class="icon-button" id="refresh-sessions" title="Refresh sessions" aria-label="Refresh sessions">↻</button></div>
         <div id="session-list" class="session-list"></div>
-        <div class="pagination" id="session-pagination" hidden><button class="text-button" id="sessions-prev">上一页</button><button class="text-button" id="sessions-next">下一页</button></div>
-        <nav class="view-list" aria-label="会话视图" role="tablist" aria-orientation="vertical">
-          <button role="tab" id="tab-conversation" data-panel="conversation" aria-controls="panel-conversation" aria-selected="true"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h14a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-8L5 21v-4.5A1.5 1.5 0 0 1 3.5 15V6A1.5 1.5 0 0 1 5 4.5Z"/></svg>对话 <span id="timeline-count" class="count"></span></button>
-          <button role="tab" id="tab-terminal" data-panel="terminal" aria-controls="panel-terminal" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></svg>终端 <span id="terminal-count" class="count"></span></button>
+        <div class="pagination" id="session-pagination" hidden><button data-i18n-text="previousPage" class="text-button" id="sessions-prev">Previous</button><button data-i18n-text="nextPage" class="text-button" id="sessions-next">Next</button></div>
+        <nav data-i18n-aria-label="sessionViews" class="view-list" aria-label="Session views" role="tablist" aria-orientation="vertical">
+          <button data-i18n-text="conversation" role="tab" id="tab-conversation" data-panel="conversation" aria-controls="panel-conversation" aria-selected="true"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h14a1.5 1.5 0 0 1 1.5 1.5v9a1.5 1.5 0 0 1-1.5 1.5h-8L5 21v-4.5A1.5 1.5 0 0 1 3.5 15V6A1.5 1.5 0 0 1 5 4.5Z"/></svg>Conversation <span id="timeline-count" class="count"></span></button>
+          <button data-i18n-text="terminal" role="tab" id="tab-terminal" data-panel="terminal" aria-controls="panel-terminal" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/></svg>Terminal <span id="terminal-count" class="count"></span></button>
           <button role="tab" id="tab-workers" data-panel="workers" aria-controls="panel-workers" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="5" rx="1"/><path d="M12 8v4M6 15v-3h12v3"/><rect x="3" y="15" width="6" height="5" rx="1"/><rect x="15" y="15" width="6" height="5" rx="1"/></svg>Workers <span id="worker-count" class="count"></span></button>
-          <button role="tab" id="tab-waits" data-panel="waits" aria-controls="panel-waits" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></svg>等待 <span id="wait-count" class="count"></span></button>
+          <button data-i18n-text="waits" role="tab" id="tab-waits" data-panel="waits" aria-controls="panel-waits" aria-selected="false" tabindex="-1"><svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3 2"/></svg>Waits <span id="wait-count" class="count"></span></button>
         </nav>
       </div>
       <div class="sidebar-bottom">
-        <span class="live-status" id="observation-status" aria-live="polite"><span class="status-dot"></span><span>未连接</span></span>
-        <button id="sidebar-settings" class="settings-trigger" type="button" aria-haspopup="dialog" aria-controls="settings-dialog">连接与设置</button>
+        <span class="live-status" id="observation-status" aria-live="polite"><span class="status-dot"></span><span data-i18n-text="disconnected">Disconnected</span></span>
+        <button data-i18n-text="connectionSettings" id="sidebar-settings" class="settings-trigger" type="button" aria-haspopup="dialog" aria-controls="settings-dialog">Connection and settings</button>
       </div>
     </aside>
-    <button class="scrim" id="dismiss-sidebar" aria-label="关闭侧边栏" tabindex="-1" hidden></button>
+    <button data-i18n-aria-label="closeSidebar" class="scrim" id="dismiss-sidebar" aria-label="Close sidebar" tabindex="-1" hidden></button>
     <main class="main">
       <header class="topbar">
-        <button class="icon-button menu-button" id="menu-button" aria-controls="sidebar" aria-expanded="false" aria-label="打开侧边栏">☰</button>
-        <div class="session-tabs" id="session-tabs" role="tablist" aria-label="已打开的会话"></div>
-        <button class="icon-button" id="new-session" aria-label="新建会话" title="新建会话 · /new" hidden>+</button>
+        <button data-i18n-aria-label="openSidebar" class="icon-button menu-button" id="menu-button" aria-controls="sidebar" aria-expanded="false" aria-label="Open sidebar">☰</button>
+        <div data-i18n-aria-label="openedSessions" class="session-tabs" id="session-tabs" role="tablist" aria-label="Open sessions"></div>
+        <button data-i18n-aria-label="newSession" data-i18n-title="newSessionShortcut" class="icon-button" id="new-session" aria-label="New session" title="New session · /new" hidden>+</button>
       </header>
-      <div class="work-title"><h1 id="session-title">ssmcp</h1><span id="session-cwd" class="tiny mono"></span><button class="text-button" type="button" id="take-control" hidden>申请控制此会话</button><button type="button" class="text-button" id="end-session" hidden>结束此会话</button></div>
+      <div class="work-title"><h1 id="session-title">ssmcp</h1><span id="session-cwd" class="tiny mono"></span><button data-i18n-text="requestControl" class="text-button" type="button" id="take-control" hidden>Request control of this session</button><button data-i18n-text="endSession" type="button" class="text-button" id="end-session" hidden>End this session</button></div>
       <div class="connect-strip" id="connect-strip" hidden>
-        <label>连接模式 <select id="connection-mode"><option value="observe">只读观察</option><option value="control">控制会话</option></select></label>
-        <button class="primary" id="connect-button">连接会话 <span aria-hidden="true">↗</span></button>
-        <span class="tiny">控制模式申请本地输入租约。</span>
+        <label data-i18n-text="connectionMode">Connection mode <select id="connection-mode"><option data-i18n-text="readOnlyObservation" value="observe">Read-only observation</option><option data-i18n-text="controlSession" value="control">Control session</option></select></label>
+        <button data-i18n-text="connectSession" class="primary" id="connect-button">Connect to a session <span aria-hidden="true">↗</span></button>
+        <span data-i18n-text="controlModeHint" class="tiny">Control mode requests a local input lease.</span>
       </div>
-      <div class="banner" id="error-banner" role="alert" hidden><span id="error-text"></span><button class="text-button" id="error-details">详细信息</button></div>
+      <div class="banner" id="error-banner" role="alert" hidden><span id="error-text"></span><button data-i18n-text="details" class="text-button" id="error-details">Details</button></div>
       <section class="panel conversation-panel" id="panel-conversation" role="tabpanel" aria-labelledby="tab-conversation">
-        <div class="timeline-scroller" id="timeline-scroller" tabindex="0" aria-label="对话与事件时间线">
-          <div class="welcome" id="welcome"><button class="secondary" id="welcome-connect">新建会话</button></div>
-          <div class="timeline-empty" id="timeline-empty" hidden><span class="prompt" aria-hidden="true">›</span><span>新对话</span></div>
-          <div class="timeline-paging" id="timeline-paging" hidden><button class="text-button" id="timeline-older">更早的记录</button><span id="timeline-page-label" class="tiny"></span><button class="text-button" id="timeline-newer">较新的记录</button></div>
+        <div data-i18n-aria-label="conversationTimeline" class="timeline-scroller" id="timeline-scroller" tabindex="0" aria-label="Conversation and event timeline">
+          <div class="welcome" id="welcome"><button data-i18n-text="newSession" class="secondary" id="welcome-connect">New session</button></div>
+          <div class="timeline-empty" id="timeline-empty" hidden><span class="prompt" aria-hidden="true">›</span><span data-i18n-text="newConversation">New conversation</span></div>
+          <div class="timeline-paging" id="timeline-paging" hidden><button data-i18n-text="olderRecords" class="text-button" id="timeline-older">Older records</button><span id="timeline-page-label" class="tiny"></span><button data-i18n-text="newerRecords" class="text-button" id="timeline-newer">Newer records</button></div>
           <div class="timeline" id="timeline"></div>
           <p class="tiny retention-note" id="retention-note" hidden></p>
         </div>
-        <button class="new-events" id="new-events" hidden>回到最新 ↓</button>
+        <button data-i18n-text="latestRecords" class="new-events" id="new-events" hidden>Jump to latest ↓</button>
         <div class="composer-wrap">
           <form class="composer" id="chat-form" hidden>
-            <label for="chat-text" class="sr-only">发送到 CLI 输入队列</label>
+            <label data-i18n-text="sendToCli" for="chat-text" class="sr-only">Send to the CLI input queue</label>
             <span class="prompt" aria-hidden="true">›</span>
-            <div id="slash-options" class="slash-options" role="listbox" aria-label="斜杠命令" hidden></div>
-            <textarea id="chat-text" aria-autocomplete="list" aria-controls="slash-options" rows="1" maxlength="16384" placeholder="输入消息或 / 命令" spellcheck="false"></textarea>
-            <button class="send-button" id="chat-send" type="submit" aria-label="发送" title="发送 · Ctrl / ⌘ + Enter">↑</button>
+            <div data-i18n-aria-label="slashCommands" id="slash-options" class="slash-options" role="listbox" aria-label="Slash commands" hidden></div>
+            <textarea data-i18n-placeholder="chatPlaceholder" id="chat-text" aria-autocomplete="list" aria-controls="slash-options" rows="1" maxlength="16384" placeholder="Enter a message or / command" spellcheck="false"></textarea>
+            <button data-i18n-aria-label="send" data-i18n-title="sendShortcut" class="send-button" id="chat-send" type="submit" aria-label="Send" title="Send · Ctrl / ⌘ + Enter">↑</button>
           </form>
-          <p class="tiny composer-note" id="composer-note">先连接一个会话。</p>
+          <p data-i18n-text="connectFirst" class="tiny composer-note" id="composer-note">Connect to a session first.</p>
         </div>
       </section>
 
       <section class="panel terminal-panel" id="panel-terminal" role="tabpanel" aria-labelledby="tab-terminal" hidden>
-        <h2 class="sr-only">终端</h2>
-        <div class="empty-state" id="terminal-empty">当前连接没有终端资源。</div>
+        <h2 data-i18n-text="terminal" class="sr-only">Terminal</h2>
+        <div data-i18n-text="noTerminalResource" class="empty-state" id="terminal-empty">This connection exposes no terminals.</div>
         <div id="terminal-content" hidden>
-          <div class="terminal-tabs" id="terminal-list" aria-label="选择输入终端"></div>
-          <div class="terminal-caption"><span id="terminal-caption" class="tiny mono"></span><button class="text-button" id="terminal-details">终端信息</button></div>
-          <pre class="terminal-output" id="terminal-output" tabindex="0" aria-label="终端文本输出"></pre>
+          <div data-i18n-aria-label="selectTerminal" class="terminal-tabs" id="terminal-list" aria-label="Select a terminal for input"></div>
+          <div class="terminal-caption"><span id="terminal-caption" class="tiny mono"></span><button data-i18n-text="terminalDetails" class="text-button" id="terminal-details">Terminal details</button></div>
+          <pre data-i18n-aria-label="terminalTextOutput" class="terminal-output" id="terminal-output" tabindex="0" aria-label="Terminal text output"></pre>
           <form class="terminal-form" id="terminal-form" hidden>
-            <label for="terminal-input" class="tiny">输入到选中的终端</label>
-            <textarea id="terminal-input" rows="2" maxlength="16384" placeholder="输入终端命令" spellcheck="false"></textarea>
-            <div class="form-actions"><label class="tiny"><input type="checkbox" id="terminal-newline" checked> 末尾加换行</label><span class="tiny">Ctrl / ⌘ + Enter 发送</span><button class="primary" type="submit" id="terminal-send">发送输入</button></div>
+            <label data-i18n-text="inputToTerminal" for="terminal-input" class="tiny">Input to the selected terminal</label>
+            <textarea data-i18n-placeholder="terminalPlaceholder" id="terminal-input" rows="2" maxlength="16384" placeholder="Enter a terminal command" spellcheck="false"></textarea>
+            <div class="form-actions"><label data-i18n-text="trailingNewline" class="tiny"><input type="checkbox" id="terminal-newline" checked> Append a newline</label><span data-i18n-text="terminalSendShortcut" class="tiny">Ctrl / ⌘ + Enter to send</span><button data-i18n-text="sendInput" class="primary" type="submit" id="terminal-send">Send input</button></div>
           </form>
-          <form class="resize-form" id="terminal-resize" hidden><span class="tiny">终端尺寸</span><label class="tiny">行 <input id="terminal-rows" type="number" min="1" max="1000" value="30" required></label><label class="tiny">列 <input id="terminal-cols" type="number" min="1" max="1000" value="100" required></label><button class="text-button" type="submit">应用尺寸</button></form>
+          <form class="resize-form" id="terminal-resize" hidden><span data-i18n-text="terminalDimensions" class="tiny">Terminal dimensions</span><label data-i18n-text="rows" class="tiny">Rows <input id="terminal-rows" type="number" min="1" max="1000" value="30" required></label><label data-i18n-text="columns" class="tiny">Columns <input id="terminal-cols" type="number" min="1" max="1000" value="100" required></label><button data-i18n-text="applyDimensions" class="text-button" type="submit">Apply dimensions</button></form>
 
         </div>
       </section>
 
       <section class="panel workers-panel" id="panel-workers" role="tabpanel" aria-labelledby="tab-workers" hidden>
-        <div class="panel-intro"><h2>Workers</h2><button class="text-button" id="worker-details" hidden>工作池详情</button></div>
-        <div class="empty-state" id="workers-empty">当前连接没有 worker pool 资源。</div>
+        <div class="panel-intro"><h2>Workers</h2><button data-i18n-text="workerPoolDetails" class="text-button" id="worker-details" hidden>Worker pool details</button></div>
+        <div data-i18n-text="noWorkerPool" class="empty-state" id="workers-empty">This connection has no worker pool.</div>
         <div id="workers-content" hidden>
           <div class="worker-overview">
             <div class="worker-summary" id="worker-summary"></div>
             <figure class="worker-productivity">
-              <figcaption>每分钟工具调用（对数）<span id="worker-peak" hidden></span></figcaption>
+              <figcaption data-i18n-text="workerCallsPerMinute">Tool calls per minute (log scale)<span id="worker-peak" hidden></span></figcaption>
               <div id="worker-trend" hidden>
-                <svg viewBox="0 0 180 40" preserveAspectRatio="none" role="img" aria-label="最近 10 分钟工具调用，对数刻度">
+                <svg data-i18n-aria-label="workerTrendDescription" viewBox="0 0 180 40" preserveAspectRatio="none" role="img" aria-label="Tool calls over the last 10 minutes, logarithmic scale">
                   <line x1="0" x2="180" y1="38" y2="38" class="trend-baseline" />
                   <polyline id="worker-trend-line" />
                 </svg>
-                <div class="trend-axis"><span>10 分钟前</span><span>现在</span></div>
+                <div class="trend-axis"><span data-i18n-text="tenMinutesAgo">10 minutes ago</span><span data-i18n-text="now">Now</span></div>
               </div>
               <pre id="worker-productivity"></pre>
             </figure>
           </div>
-          <form class="worker-resize" id="worker-resize" hidden><label for="worker-total">目标站数</label><input id="worker-total" type="number" min="0" max="128" required aria-label="目标 worker 站数"><button class="secondary" type="submit">应用</button></form>
+          <form class="worker-resize" id="worker-resize" hidden><label data-i18n-text="targetSlots" for="worker-total">Target slots</label><input data-i18n-aria-label="targetWorkerSlots" id="worker-total" type="number" min="0" max="128" required aria-label="Target worker slots"><button data-i18n-text="apply" class="secondary" type="submit">Apply</button></form>
           <div class="worker-list" id="worker-list"></div>
-          <div class="pagination"><button class="text-button" id="workers-prev">上一页</button><span class="tiny" id="workers-page"></span><button class="text-button" id="workers-next">下一页</button></div>
+          <div class="pagination"><button data-i18n-text="previousPage" class="text-button" id="workers-prev">Previous</button><span class="tiny" id="workers-page"></span><button data-i18n-text="nextPage" class="text-button" id="workers-next">Next</button></div>
         </div>
       </section>
 
       <section class="panel waits-panel" id="panel-waits" role="tabpanel" aria-labelledby="tab-waits" hidden>
-        <div class="panel-intro"><div><h2>等待与计时</h2><p class="muted">后台等待、实际耗时与定时提示计划。</p></div></div>
-        <div class="empty-state" id="waits-empty">连接后读取真实等待状态。</div>
+        <div class="panel-intro"><div><h2 data-i18n-text="waitsAndTimers">Waits and timers</h2><p data-i18n-text="waitsPanelDescription" class="muted">Background waits, elapsed times, and scheduled prompts.</p></div></div>
+        <div data-i18n-text="connectForWaits" class="empty-state" id="waits-empty">Connect to view live wait status.</div>
         <div id="waits-content" hidden></div>
       </section>
 
-      <div id="terminal-keys" class="terminal-keys" role="group" aria-label="发送到当前终端的快捷键" hidden>
-        <button data-key="escape" title="发送 Escape">Esc</button><button data-key="tab" title="发送 Tab">Tab</button>
-        <button data-key="interrupt" title="中断当前终端操作">Ctrl-C</button><button data-key="left" aria-label="向左">←</button><button data-key="down" aria-label="向下">↓</button><button data-key="up" aria-label="向上">↑</button><button data-key="right" aria-label="向右">→</button>
+      <div data-i18n-aria-label="terminalShortcuts" id="terminal-keys" class="terminal-keys" role="group" aria-label="Shortcuts for the current terminal" hidden>
+        <button data-i18n-title="sendEscape" data-key="escape" title="Send Escape">Esc</button><button data-i18n-title="sendTab" data-key="tab" title="Send Tab">Tab</button>
+        <button data-i18n-title="interruptTerminal" data-key="interrupt" title="Interrupt the current terminal operation">Ctrl-C</button><button data-i18n-aria-label="left" data-key="left" aria-label="Left">←</button><button data-i18n-aria-label="down" data-key="down" aria-label="Down">↓</button><button data-i18n-aria-label="up" data-key="up" aria-label="Up">↑</button><button data-i18n-aria-label="right" data-key="right" aria-label="Right">→</button>
       </div>
     </main>
   </div>
 
   <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
     <div class="settings-heading">
-      <h2 id="settings-title">连接与设置</h2>
-      <button class="icon-button" type="button" data-close="settings-dialog" aria-label="关闭设置">×</button>
+      <h2 data-i18n-text="connectionSettings" id="settings-title">Connection and settings</h2>
+      <button data-i18n-aria-label="closeSettings" class="icon-button" type="button" data-close="settings-dialog" aria-label="Close settings">×</button>
     </div>
-    <div class="settings-tabs" role="tablist" aria-label="设置类别">
-      <button type="button" role="tab" id="settings-tab-network" aria-selected="true" aria-controls="settings-network">连接</button>
-      <button type="button" role="tab" id="settings-tab-chat" aria-selected="false" aria-controls="settings-chat" tabindex="-1">对话</button>
-      <button type="button" role="tab" id="settings-tab-general" aria-selected="false" aria-controls="settings-general" tabindex="-1">通用</button>
+    <div data-i18n-aria-label="settingsCategories" class="settings-tabs" role="tablist" aria-label="Settings categories">
+      <button data-i18n-text="connect" type="button" role="tab" id="settings-tab-network" aria-selected="true" aria-controls="settings-network">Connect</button>
+      <button data-i18n-text="conversation" type="button" role="tab" id="settings-tab-chat" aria-selected="false" aria-controls="settings-chat" tabindex="-1">Conversation</button>
+      <button data-i18n-text="general" type="button" role="tab" id="settings-tab-general" aria-selected="false" aria-controls="settings-general" tabindex="-1">General</button>
     </div>
     <div class="settings-content">
       <section id="settings-network" role="tabpanel" aria-labelledby="settings-tab-network">
-        <div class="settings-fact"><span>网关认证</span><span class="gateway-label"><span class="status-dot" id="auth-dot"></span><span id="auth-status">尚未认证</span></span></div>
+        <div class="settings-fact"><span data-i18n-text="gatewayPairing">Gateway pairing</span><span class="gateway-label"><span class="status-dot" id="auth-dot"></span><span data-i18n-text="notAuthenticated" id="auth-status">Unpaired</span></span></div>
         <span class="sr-only" id="connection-label"></span>
-        <button type="button" class="settings-action settings-forward" id="diagnostics-button">连接详情</button>
+        <button data-i18n-text="gatewayDetails" type="button" class="settings-action settings-forward" id="diagnostics-button">Connection details</button>
         <div class="settings-actions" id="connected-actions" hidden>
-          <button type="button" class="settings-action" id="observe-button">暂停观察</button>
-          <button type="button" class="settings-action" id="refresh-state">刷新状态</button>
-          <button type="button" class="settings-action" id="disconnect-button">断开连接</button>
+          <button data-i18n-text="pauseObservation" type="button" class="settings-action" id="observe-button">Pause observation</button>
+          <button data-i18n-text="refreshState" type="button" class="settings-action" id="refresh-state">Refresh state</button>
+          <button data-i18n-text="disconnect" type="button" class="settings-action" id="disconnect-button">Disconnect</button>
         </div>
         <span class="sr-only" id="status-cursor"></span>
       </section>
       <section id="settings-chat" role="tabpanel" aria-labelledby="settings-tab-chat" hidden>
-        <label class="setting-field">接收方 <select id="chat-target"><option value="next">下一个接收者</option></select></label>
+        <label data-i18n-text="recipient" class="setting-field">Recipient <select id="chat-target"><option data-i18n-text="nextRecipient" value="next">Next recipient</option></select></label>
         <div id="conversation-toolbar" hidden>
-          <label class="setting-field">对话范围 <select id="thread-filter" aria-label="对话来源"><option value="process">整个会话</option><option value="main">主对话</option></select></label>
-          <button type="button" class="settings-action" id="history-more" hidden>读取更早历史</button>
-          <button type="button" class="settings-action settings-forward" id="threads-button" hidden>线程</button>
-          <button type="button" class="settings-action settings-forward" id="queue-button" hidden>输入队列</button>
+          <label data-i18n-text="conversationScope" class="setting-field">Conversation scope <select data-i18n-aria-label="conversationSource" id="thread-filter" aria-label="Conversation source"><option data-i18n-text="entireSession" value="process">Entire session</option><option data-i18n-text="mainConversation" value="main">Main conversation</option></select></label>
+          <button data-i18n-text="readOlderHistory" type="button" class="settings-action" id="history-more" hidden>Read earlier history</button>
+          <button data-i18n-text="threads" type="button" class="settings-action settings-forward" id="threads-button" hidden>Threads</button>
+          <button data-i18n-text="inputQueue" type="button" class="settings-action settings-forward" id="queue-button" hidden>Input queue</button>
         </div>
       </section>
       <section id="settings-general" role="tabpanel" aria-labelledby="settings-tab-general" hidden>
-        <button type="button" class="settings-action" id="theme-button">切换明暗</button>
-        <button type="button" class="settings-action settings-forward" id="commands-button">操作记录 <span id="command-count"></span></button>
-        <button type="button" class="settings-action settings-forward" id="update-button" hidden>更新</button>
+        <button data-i18n-text="toggleTheme" type="button" class="settings-action" id="theme-button">Toggle light and dark mode</button>
+        <button data-i18n-text="operationHistory" type="button" class="settings-action settings-forward" id="commands-button">Operation log <span id="command-count"></span></button>
+        <button data-i18n-text="update" type="button" class="settings-action settings-forward" id="update-button" hidden>Update</button>
         <a class="settings-action settings-forward" href="https://github.com/LIghtJUNction/ssmcp" target="_blank" rel="noopener noreferrer">GitHub</a>
       </section>
     </div>
   </dialog>
   <dialog id="end-session-dialog" aria-labelledby="end-session-title">
-    <h2 id="end-session-title">结束此会话？</h2>
-    <p>将停止本机网关为此会话启动的核心进程。</p>
+    <h2 data-i18n-text="confirmEndSession" id="end-session-title">End this session?</h2>
+    <p data-i18n-text="endSessionExplanation">This stops the process the local gateway started for this session.</p>
     <p><code id="end-session-target"></code></p>
     <p id="end-session-error" class="form-error" role="alert"></p>
-    <div class="form-actions"><button type="button" class="text-button" id="end-session-cancel" data-close="end-session-dialog" autofocus>取消</button><button type="button" class="primary" id="end-session-confirm">结束此会话</button></div>
+    <div class="form-actions"><button data-i18n-text="cancel" type="button" class="text-button" id="end-session-cancel" data-close="end-session-dialog" autofocus>Cancel</button><button data-i18n-text="endSession" type="button" class="primary" id="end-session-confirm">End this session</button></div>
   </dialog>
-  <dialog id="details-dialog" class="details-dialog"><div class="dialog-heading"><h2 id="details-title">详细信息</h2><button type="button" class="icon-button" data-close="details-dialog" aria-label="关闭">×</button></div><div id="details-content"></div></dialog>
-  <noscript>此工作台需要 JavaScript；没有 JavaScript 时不会建立连接或发送命令。</noscript>
+  <dialog id="details-dialog" class="details-dialog"><div class="dialog-heading"><h2 data-i18n-text="details" id="details-title">Details</h2><button data-i18n-aria-label="close" type="button" class="icon-button" data-close="details-dialog" aria-label="Close">×</button></div><div id="details-content"></div></dialog>
+  <noscript>This workbench requires JavaScript to connect and send commands.</noscript>
 </body>
 </html>

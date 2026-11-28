@@ -247,6 +247,7 @@ async fn default_gateway_serves_the_bundled_browser_app() {
         ("/styles.css", "text/css"),
         ("/app.mjs", "text/javascript"),
         ("/src/gateway.mjs", "text/javascript"),
+        ("/src/locale.mjs", "text/javascript"),
     ] {
         let page = http()
             .get(format!("{}{path}", server.url))

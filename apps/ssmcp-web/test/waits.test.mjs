@@ -29,10 +29,10 @@ test('statistics use distinct actually completed ready observations and nearest-
 });
 
 test('missing data is unknown, genuine zero duration remains zero, and window expiry is not a job failure', () => {
-  assert.equal(timeDuration(null), '未知');
-  assert.equal(timeDuration(undefined), '未知');
-  assert.equal(timeDuration(0), '0 毫秒');
-  assert.equal(timeStamp(null), '未知');
+  assert.equal(timeDuration(null), 'Unknown');
+  assert.equal(timeDuration(undefined), 'Unknown');
+  assert.equal(timeDuration(0), '0 ms');
+  assert.equal(timeStamp(null), 'Unknown');
   assert.equal(waitStatistics({}).meanMs, null);
   assert.equal(waitLifecycle({ status: 'expired', wait: { outcome: 'window_expired' } }).key, 'window_expired');
   assert.equal(waitStatistics({ recent: [completed('zero', 0)] }).meanMs, 0);
@@ -44,10 +44,10 @@ test('display keeps lifetime, read window, retrieval attempt and acknowledgement
     first_read_at_ms: 1_795_000_071_000, delivery_lag_ms: 1000, acknowledged_at_ms: null,
     read_windows: 2, replay_count: 0, private_result: 'PRIVATE_RESULT' });
   const rows = Object.fromEntries(waitRows(entry));
-  assert.equal(rows['生命周期上限'], '1 时 0 分 0 秒');
-  assert.equal(rows['本轮读取窗口'], '55 秒');
-  assert.equal(rows['显式确认时间'], '未知');
-  assert.equal(rows['首次读取尝试延迟'], '1 秒');
+  assert.equal(rows['Lifetime limit'], '1 h 0 min 0 s');
+  assert.equal(rows['Current read window'], '55 s');
+  assert.equal(rows['Explicit acknowledgment'], 'Unknown');
+  assert.equal(rows['First read attempt latency'], '1 s');
   assert.ok(!JSON.stringify(rows).includes('PRIVATE_RESULT'));
   assert.equal(waitLifecycle(entry).key, 'read_attempt');
 });
@@ -56,8 +56,8 @@ test('prompt summary exposes scheduling metadata only and preserves pending and 
   const rows = Object.fromEntries(promptRows({ id: 'prompt-1', status: 'paused', interval_ms: 1000,
     next_fire_unix_ms: null, pending_count: 1, missed_count: 3, scope: 'native_connection',
     template: 'PRIVATE_TEMPLATE', variables: { credential: 'PRIVATE_VALUE' } }));
-  assert.equal(rows['下次触发'], '当前无下一次触发');
-  assert.equal(rows['待确认'], '1');
-  assert.equal(rows['合并或错过的触发'], '3');
+  assert.equal(rows['Next trigger'], 'No upcoming trigger');
+  assert.equal(rows['Pending acknowledgment'], '1');
+  assert.equal(rows['Combined or missed triggers'], '3');
   assert.ok(!JSON.stringify(rows).includes('PRIVATE_'));
 });

@@ -22,8 +22,8 @@ test('history keeps input identity after bounded payload truncation', () => {
 test('editable reply retains the whole draft and bounds UTF-8 without splitting characters', () => {
   const draft = '已有回答 🦀';
   const value = quoteReply('message_original', '中文🦀\n'.repeat(900), draft, 4096);
-  assert.ok(value.startsWith('> 回复消息 message_original\n> 中文🦀'));
-  assert.ok(value.includes('引用已截断')); assert.ok(value.endsWith(draft));
+  assert.ok(value.startsWith('> Reply to message message_original\n> 中文🦀'));
+  assert.ok(value.includes('quote truncated')); assert.ok(value.endsWith(draft));
   assert.ok(new TextEncoder().encode(value).length <= 4096);
   assert.equal(new TextDecoder().decode(new TextEncoder().encode(value)), value);
   assert.throws(() => quoteReply('bad\nid', 'text', ''));

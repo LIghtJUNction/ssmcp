@@ -1,11 +1,12 @@
+import { t } from './locale.mjs';
 import { counter, compareCounters } from './protocol.mjs';
 
 const names = {
-  'ssmcp.tool_call': '工具调用', answer: '回复', progress: '进展', input: '输入', 'ssmcp.status': '状态',
-  'ssmcp.worker.started': 'Worker 开始', 'ssmcp.worker.progress': 'Worker 进展',
-  'ssmcp.worker.completed': 'Worker 完成', 'ssmcp.worker.idle': 'Worker 空闲',
-  'ssmcp.event': '事件', 'ssmcp.terminal': '终端输出', 'ssmcp.finish': '调用结束',
-  'ssmcp.backend': '后端状态', receipt: '操作回执', notice: '观察记录',
+  'ssmcp.tool_call': t('toolCall'), answer: t('answer'), progress: t('progress'), input: t('input'), 'ssmcp.status': t('status'),
+  'ssmcp.worker.started': t('workerStarted'), 'ssmcp.worker.progress': t('workerProgress'),
+  'ssmcp.worker.completed': t('workerCompleted'), 'ssmcp.worker.idle': t('workerIdle'),
+  'ssmcp.event': t('event'), 'ssmcp.terminal': t('terminalOutput'), 'ssmcp.finish': t('callCompleted'),
+  'ssmcp.backend': t('backendState'), receipt: t('commandReceipt'), notice: t('observationLog'),
 };
 export const kindLabel = kind => names[kind] || kind;
 export const shortId = value => typeof value === 'string' ? value.length > 20 ? `${value.slice(0, 10)}…${value.slice(-6)}` : value : '—';
@@ -38,23 +39,23 @@ export function textProjection(value) {
   const decoded = decodeBase64(value.data_base64 ?? value.params?.deltaBase64, 8192);
   if (decoded) return decoded;
   if (value.command !== undefined) return plain(typeof value.command === 'string' ? value.command : JSON.stringify(value.command));
-  return plain(value.type ?? '事件');
+  return plain(value.type ?? t('event'));
 }
 
 export const inputOriginLabel = origin => ({
-  human: '用户', system_hook: '系统提示', agent_timer: '定时提示',
-  worker_event: 'Worker 事件', maintenance: '维护提示',
-}[origin] || '输入');
+  human: t('user'), system_hook: t('systemPrompt'), agent_timer: t('timerPrompt'),
+  worker_event: t('workerEvent'), maintenance: t('maintenancePrompt'),
+}[origin] || t('input'));
 export const validMessageId = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 
 /** Quotes are editable draft text; the existing send receipt covers the whole text. */
 export function quoteReply(messageId, text, draft = '', maximum = 16_384) {
-  if (!validMessageId(messageId)) throw new Error('这条消息没有可引用的原始 ID。');
+  if (!validMessageId(messageId)) throw new Error(t('missingQuoteId'));
   const bytes = value => new TextEncoder().encode(value).length;
-  const suffix = '\n> …（引用已截断）';
-  let quote = '> 回复消息 ' + messageId + '\n> ';
+  const suffix = t('quoteTruncated');
+  let quote = t('quotePrefix') + messageId + '\n> ';
   const reserve = bytes(draft) + bytes('\n\n') + bytes(suffix);
-  if (bytes(quote) + reserve > maximum) throw new Error('草稿空间不足，请缩短后引用。');
+  if (bytes(quote) + reserve > maximum) throw new Error(t('quoteDraftTooLong'));
   let used = 0, truncated = false;
   const clean = plain(text, 32_768);
   for (const char of clean) {
@@ -99,7 +100,7 @@ export function projectEvent(event, generation) {
 }
 
 export function projectHistory(event, generation) {
-  counter(event.sequence, '对话事件序号');
+  counter(event.sequence, t('conversationSequence'));
   const message = messageProjection(event.value ?? {}, event);
   const kind = message.inputSide ? 'input' : event.kind || 'event';
   return {
@@ -112,17 +113,17 @@ export function projectHistory(event, generation) {
 
 export function validateHistory(value, cursor) {
   if (!value || value.schema_version !== 1 || !Array.isArray(value.events) || value.events.length > 64
-      || typeof value.has_more !== 'boolean' || typeof value.gap !== 'boolean') throw new Error('对话历史格式无效。');
+      || typeof value.has_more !== 'boolean' || typeof value.gap !== 'boolean') throw new Error(t('invalidConversationHistory'));
   for (const key of ['start_cursor', 'next_cursor', 'end_cursor']) counter(value[key], key);
   if (compareCounters(value.start_cursor, value.next_cursor) > 0 || compareCounters(value.next_cursor, value.end_cursor) > 0
-      || value.has_more !== (compareCounters(value.next_cursor, value.end_cursor) < 0)) throw new Error('对话历史游标无效。');
-  if (cursor !== undefined && (compareCounters(value.next_cursor, cursor) < 0 || value.gap !== (compareCounters(cursor, value.start_cursor) < 0))) throw new Error('对话历史与请求游标不匹配。');
+      || value.has_more !== (compareCounters(value.next_cursor, value.end_cursor) < 0)) throw new Error(t('invalidConversationCursor'));
+  if (cursor !== undefined && (compareCounters(value.next_cursor, cursor) < 0 || value.gap !== (compareCounters(cursor, value.start_cursor) < 0))) throw new Error(t('conversationCursorMismatch'));
   let previous = null;
   for (const event of value.events) {
     counter(event.sequence);
     if (compareCounters(event.sequence, value.start_cursor) < 0 || compareCounters(event.sequence, value.next_cursor) >= 0
         || (previous !== null && compareCounters(event.sequence, previous) <= 0)
-        || (cursor !== undefined && compareCounters(event.sequence, cursor) < 0)) throw new Error('对话历史事件顺序无效。');
+        || (cursor !== undefined && compareCounters(event.sequence, cursor) < 0)) throw new Error(t('invalidConversationOrder'));
     previous = event.sequence;
   }
   return value;
@@ -131,20 +132,20 @@ export function validateHistory(value, cursor) {
 export function duration(value) {
   try {
     const seconds = BigInt(counter(value)) / 1000n;
-    if (seconds < 60n) return `${seconds} 秒`;
-    if (seconds < 3600n) return `${seconds / 60n} 分 ${seconds % 60n} 秒`;
-    return `${seconds / 3600n} 时 ${seconds % 3600n / 60n} 分`;
+    if (seconds < 60n) return t('durationSeconds', seconds);
+    if (seconds < 3600n) return t('durationMinutes', seconds / 60n, seconds % 60n);
+    return t('durationHours', seconds / 3600n, seconds % 3600n / 60n);
   } catch { return '—'; }
 }
 
 // Metadata is for inspection, never a source of HTML or command authority.
 export function redact(value, depth = 0) {
-  if (depth > 8) return '[层级已截断]';
+  if (depth > 8) return t('truncatedNesting');
   if (typeof value === 'string') return plain(value, 8192);
   if (Array.isArray(value)) return value.slice(0, 128).map(item => redact(item, depth + 1));
   if (value && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).slice(0, 128).map(([key, item]) => [
-      key, /token|secret|password|authorization|cookie/i.test(key) ? '[已隐藏]' : redact(item, depth + 1),
+      key, /token|secret|password|authorization|cookie/i.test(key) ? t('redacted') : redact(item, depth + 1),
     ]));
   }
   return value;

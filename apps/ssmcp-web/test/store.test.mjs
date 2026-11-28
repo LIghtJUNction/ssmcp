@@ -46,7 +46,7 @@ test('unresolved commands cannot be evicted or silently replayed when the ledger
   assert.throws(() => ledger.add({ requestId: 'three' }));
   assert.throws(() => ledger.add({ requestId: 'one' }));
   ledger.update('two', { status: 'confirmed', receipt: { token: 'never display', text: 'ok' } });
-  assert.equal(ledger.records[1].receipt.token, '[已隐藏]');
+  assert.equal(ledger.records[1].receipt.token, '[redacted]');
   ledger.add({ requestId: 'three' });
   assert.deepEqual(ledger.records.map(record => record.requestId), ['one', 'three']);
 });
@@ -57,7 +57,7 @@ test('metadata is bounded and credential fields are redacted without changing or
   assert.equal(ledger.records[0].requestId, 'original.request');
   assert.equal(ledger.records[0].receipt.truncated, true);
   const timeline = new Timeline(); timeline.put({ id: 'x', metadata: { authorization: 'secret', nested: { agent_token: 'private' } } });
-  assert.equal(timeline.rows[0].metadata.nested.agent_token, '[已隐藏]');
+  assert.equal(timeline.rows[0].metadata.nested.agent_token, '[redacted]');
   assert.equal(JSON.stringify(timeline.rows).includes('secret'), false);
 });
 
@@ -66,8 +66,8 @@ test('history validates string cursors and real gap semantics; durations do not 
   assert.equal(validateHistory(history, '9007199254740992'), history);
   assert.throws(() => validateHistory({ ...history, gap: false }, '9007199254740992'));
   assert.throws(() => validateHistory({ ...history, next_cursor: 9007199254740994 }));
-  assert.equal(duration('61000'), '1 分 1 秒');
-  assert.match(duration('18446744073709551615'), /^5124095576030 时 /);
+  assert.equal(duration('61000'), '1 min 1 s');
+  assert.match(duration('18446744073709551615'), /^5124095576030 h /);
 });
 
 test('draft clearing requires the verified original target, connection, generation, and unchanged text', () => {

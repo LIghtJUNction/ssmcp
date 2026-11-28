@@ -335,7 +335,6 @@ dialog form { display: grid; gap: 10px; } .dialog-heading { justify-content: spa
 .launch-confirmations legend { padding-inline: 5px; }
 .launch-confirmations label { display: flex; align-items: flex-start; gap: 8px; padding: 6px 0; }
 .launch-confirmations input { flex: 0 0 auto; width: 17px; height: 17px; margin: 2px 0 0; accent-color: var(--accent); }
-.launch-confirmations [lang="en"], .launch-registration [lang="en"] { color: var(--muted); }
 #launch-back { justify-self: center; min-height: 44px; }
 @media (max-height: 500px) {
   .launch-setup { padding-top: max(18px,env(safe-area-inset-top)); padding-bottom: max(18px,env(safe-area-inset-bottom)); }

@@ -67,7 +67,7 @@ test('a foreground selector may share a saved session label without changing the
   gateway.setToken('fixture-token');
   assert.deepEqual((await gateway.sessions()).sessions, sessions);
   sessions[1].target = '';
-  await assert.rejects(gateway.sessions(), /连接目标无效/);
+  await assert.rejects(gateway.sessions(), /invalid target/);
 });
 
 test('private pairing files are bounded and accepted only for the exact page origin', async () => {
@@ -78,13 +78,13 @@ test('private pairing files are bounded and accepted only for the exact page ori
   assert.equal(await readPairingToken(file({ url: origin + '/' }), origin), token);
   for (const url of ['http://localhost:8787', 'http://127.0.0.1:8788', 'https://127.0.0.1:8787',
     origin + '/other', origin + '/?redirect', origin + '/#token', 'http://x@127.0.0.1:8787']) {
-    await assert.rejects(readPairingToken(file({ url }), origin), /地址不一致/);
+    await assert.rejects(readPairingToken(file({ url }), origin), /different address/);
   }
   for (const fields of [{ schema: 'unknown' }, { token: 'bad' }, { url: 42 }]) {
-    await assert.rejects(readPairingToken(file(fields), origin), /格式无效/);
+    await assert.rejects(readPairingToken(file(fields), origin), /file is invalid/);
   }
-  await assert.rejects(readPairingToken(new Blob(['not JSON']), origin), /无法读取/);
-  await assert.rejects(readPairingToken({ size: 9000, text() { assert.fail('oversized file read'); } }, origin), /过大/);
+  await assert.rejects(readPairingToken(new Blob(['not JSON']), origin), /Could not read/);
+  await assert.rejects(readPairingToken({ size: 9000, text() { assert.fail('oversized file read'); } }, origin), /too large/);
 });
 
 test('pairing token is sent only in Authorization and never URL, body or serializable transport state', async () => {
@@ -191,7 +191,7 @@ test('owned creation binds the exact receipt and only retries the original expli
     const body = JSON.parse(init.body); bodies.push(body); return respond(body);
   }});
   const args = { destination: 'alice@relay.example', terms: false, privacy: false };
-  await assert.rejects(gateway.createOwnedSession(args), /配对/);
+  await assert.rejects(gateway.createOwnedSession(args), /Pair with/);
   gateway.setToken('pair');
   await assert.rejects(gateway.createOwnedSession(args), {effect: 'may_have_occurred'});
   await assert.rejects(gateway.createOwnedSession({...args, privacy: true}), {code: 'pending'});

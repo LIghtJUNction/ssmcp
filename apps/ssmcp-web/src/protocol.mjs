@@ -1,3 +1,4 @@
+import { t } from './locale.mjs';
 // zbridge v1: see docs/gui-bridge.md and src/session/attach/zbridge_adapter.rs.
 export const VERSION = 1;
 export const MAX_FRAME_BYTES = 256 * 1024;
@@ -34,55 +35,55 @@ export class BridgeError extends Error {
 
 export function byteLength(value) {
   const text = typeof value === 'string' ? value : JSON.stringify(value);
-  if (typeof text !== 'string') throw new ProtocolError('数据不是有效 JSON。');
+  if (typeof text !== 'string') throw new ProtocolError(t('invalidJson'));
   return encoder.encode(text).byteLength;
 }
 
-export function object(value, label = '对象') {
+export function object(value, label = t('object')) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new ProtocolError(`${label}必须是 JSON object。`);
+    throw new ProtocolError(t('invalidObject', label));
   }
   return value;
 }
 
-function fields(value, allowed, required = allowed, label = '响应') {
+function fields(value, allowed, required = allowed, label = t('response')) {
   object(value, label);
   for (const key of Object.keys(value)) {
-    if (!allowed.includes(key)) throw new ProtocolError(`${label}包含未声明字段：${key}`);
+    if (!allowed.includes(key)) throw new ProtocolError(t('undeclaredField', label, key));
   }
   for (const key of required) {
-    if (!Object.hasOwn(value, key)) throw new ProtocolError(`${label}缺少字段：${key}`);
+    if (!Object.hasOwn(value, key)) throw new ProtocolError(t('missingField', label, key));
   }
 }
 
-export function identifier(value, label = '标识') {
+export function identifier(value, label = t('identifier')) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(value)) {
-    throw new ProtocolError(`${label}不是有效的 zbridge 标识。`);
+    throw new ProtocolError(t('invalidIdentifier', label));
   }
   return value;
 }
 
 function integer(value, min, max, label) {
   if (!Number.isSafeInteger(value) || value < min || value > max) {
-    throw new ProtocolError(`${label}超出允许范围。`);
+    throw new ProtocolError(t('outOfRange', label));
   }
   return value;
 }
 
 function boolean(value, label) {
-  if (typeof value !== 'boolean') throw new ProtocolError(`${label}必须是布尔值。`);
+  if (typeof value !== 'boolean') throw new ProtocolError(t('invalidBoolean', label));
 }
 
 function text(value, maximum, label) {
   if (typeof value !== 'string' || byteLength(value) > maximum) {
-    throw new ProtocolError(`${label}超过文字限制。`);
+    throw new ProtocolError(t('textTooLong', label));
   }
 }
 
-export function counter(value, label = '游标') {
+export function counter(value, label = t('cursor')) {
   if (typeof value !== 'string' || !/^(0|[1-9][0-9]{0,19})$/.test(value)
       || BigInt(value) > MAX_COUNTER) {
-    throw new ProtocolError(`${label}必须是 u64 范围内的规范十进制字符串。`);
+    throw new ProtocolError(t('invalidCounter', label));
   }
   return value;
 }
@@ -95,7 +96,7 @@ export function compareCounters(left, right) {
 
 export function requestId(prefix = 'web') {
   const random = globalThis.crypto?.randomUUID?.();
-  if (!random) throw new ProtocolError('浏览器缺少安全随机数支持，请使用 HTTPS 或本机地址。');
+  if (!random) throw new ProtocolError(t('missingSecureRandom'));
   return `${prefix}_${random}`;
 }
 
@@ -108,65 +109,65 @@ export function createRequest(operation, id = requestId()) {
 
 export function validateRequest(request) {
   fields(request, ['version', 'id', 'operation']);
-  if (request.version !== VERSION) throw new ProtocolError('不支持的 zbridge 请求版本。');
-  identifier(request.id, '请求 ID');
-  const op = object(request.operation, '操作');
+  if (request.version !== VERSION) throw new ProtocolError(t('unsupportedBridgeRequest'));
+  identifier(request.id, t('requestId'));
+  const op = object(request.operation, t('operation'));
   switch (op.op) {
     case 'capabilities':
       fields(op, ['op']);
       break;
     case 'state':
       fields(op, ['op', 'generation', 'resource', 'query'], ['op', 'generation', 'resource']);
-      identifier(op.generation, '后端代次');
-      identifier(op.resource, '资源');
-      object(op.query === undefined ? {} : op.query, '查询');
-      if (byteLength(op.query === undefined ? {} : op.query) > MAX_ARGUMENT_BYTES) throw new ProtocolError('查询过大。');
+      identifier(op.generation, t('backendGeneration'));
+      identifier(op.resource, t('resource'));
+      object(op.query === undefined ? {} : op.query, t('query'));
+      if (byteLength(op.query === undefined ? {} : op.query) > MAX_ARGUMENT_BYTES) throw new ProtocolError(t('queryTooLarge'));
       break;
     case 'events':
       fields(op, ['op', 'generation', 'cursor', 'limit', 'wait_ms'], ['op', 'generation']);
-      identifier(op.generation, '后端代次');
+      identifier(op.generation, t('backendGeneration'));
       if (op.cursor !== undefined && op.cursor !== null) counter(op.cursor);
-      integer(op.limit === undefined ? 64 : op.limit, 1, MAX_EVENTS, '事件页大小');
-      integer(op.wait_ms === undefined ? 0 : op.wait_ms, 0, MAX_V1_WAIT_MS, 'v1 等待时间');
+      integer(op.limit === undefined ? 64 : op.limit, 1, MAX_EVENTS, t('eventPageSize'));
+      integer(op.wait_ms === undefined ? 0 : op.wait_ms, 0, MAX_V1_WAIT_MS, t('v1WaitTime'));
       break;
     case 'command':
       fields(op, ['op', 'generation', 'command', 'arguments'], ['op', 'generation', 'command']);
-      identifier(op.generation, '后端代次');
-      identifier(op.command, '命令');
-      object(op.arguments === undefined ? {} : op.arguments, '参数');
-      if (byteLength(op.arguments === undefined ? {} : op.arguments) > MAX_ARGUMENT_BYTES) throw new ProtocolError('命令参数过大。');
+      identifier(op.generation, t('backendGeneration'));
+      identifier(op.command, t('command'));
+      object(op.arguments === undefined ? {} : op.arguments, t('arguments'));
+      if (byteLength(op.arguments === undefined ? {} : op.arguments) > MAX_ARGUMENT_BYTES) throw new ProtocolError(t('argumentsTooLarge'));
       break;
     default:
-      throw new ProtocolError('未声明的 zbridge 操作。');
+      throw new ProtocolError(t('unknownBridgeOperation'));
   }
-  if (byteLength(request) > MAX_FRAME_BYTES) throw new ProtocolError('请求帧过大。');
+  if (byteLength(request) > MAX_FRAME_BYTES) throw new ProtocolError(t('requestTooLarge'));
   return request;
 }
 
 export function validateCapabilities(value) {
   fields(value, ['application', 'mode', 'resources', 'commands', 'events', 'max_frame_bytes', 'max_event_page_bytes']);
-  identifier(value.application, '应用标识');
-  if (!['observe', 'control'].includes(value.mode)) throw new ProtocolError('能力中的连接模式无效。');
+  identifier(value.application, t('applicationId'));
+  if (!['observe', 'control'].includes(value.mode)) throw new ProtocolError(t('invalidCapabilityMode'));
   if (!Array.isArray(value.resources) || !Array.isArray(value.commands)
       || value.resources.length + value.commands.length > 128
       || (value.mode === 'observe' && value.commands.length)) {
-    throw new ProtocolError('能力目录或观察模式命令范围无效。');
+    throw new ProtocolError(t('invalidCapabilityScope'));
   }
-  boolean(value.events, '事件能力');
-  integer(value.max_frame_bytes, 1, MAX_FRAME_BYTES, '帧大小');
-  integer(value.max_event_page_bytes, 1, MAX_PAGE_BYTES, '事件页字节数');
+  boolean(value.events, t('eventCapability'));
+  integer(value.max_frame_bytes, 1, MAX_FRAME_BYTES, t('frameSize'));
+  integer(value.max_event_page_bytes, 1, MAX_PAGE_BYTES, t('eventPageBytes'));
   for (const [items, command] of [[value.resources, false], [value.commands, true]]) {
     const seen = new Set();
     for (const item of items) {
       fields(item, command ? ['id', 'description', 'input_schema'] : ['id', 'schema_version', 'description']);
       identifier(item.id);
-      if (seen.has(item.id)) throw new ProtocolError('能力目录包含重复标识。');
+      if (seen.has(item.id)) throw new ProtocolError(t('duplicateCapabilityIds'));
       seen.add(item.id);
-      text(item.description, 1024, '能力描述');
+      text(item.description, 1024, t('capabilityDescription'));
       if (command) {
-        object(item.input_schema, '命令 schema');
-        if (byteLength(item.input_schema) > MAX_ARGUMENT_BYTES) throw new ProtocolError('命令 schema 过大。');
-      } else integer(item.schema_version, 1, 65535, '资源 schema 版本');
+        object(item.input_schema, t('commandSchema'));
+        if (byteLength(item.input_schema) > MAX_ARGUMENT_BYTES) throw new ProtocolError(t('commandSchemaTooLarge'));
+      } else integer(item.schema_version, 1, 65535, t('resourceSchemaVersion'));
     }
   }
   return value;
@@ -175,7 +176,7 @@ export function validateCapabilities(value) {
 export function validatePage(page, { cursor = null, limit = MAX_EVENTS } = {}) {
   fields(page, ['events', 'start_cursor', 'next_cursor', 'live_cursor', 'retention_gap', 'has_more']);
   if (!Array.isArray(page.events) || page.events.length > limit || page.events.length > MAX_EVENTS) {
-    throw new ProtocolError('事件页超出条数限制。');
+    throw new ProtocolError(t('tooManyEvents'));
   }
   for (const key of ['start_cursor', 'next_cursor', 'live_cursor']) counter(page[key], key);
   boolean(page.retention_gap, 'retention_gap');
@@ -183,17 +184,17 @@ export function validatePage(page, { cursor = null, limit = MAX_EVENTS } = {}) {
   if (compareCounters(page.start_cursor, page.next_cursor) > 0
       || compareCounters(page.next_cursor, page.live_cursor) > 0
       || page.has_more !== (compareCounters(page.next_cursor, page.live_cursor) < 0)) {
-    throw new ProtocolError('事件页的游标关系无效。');
+    throw new ProtocolError(t('invalidEventPageCursor'));
   }
   let previous = null;
   for (const event of page.events) {
     fields(event, ['sequence', 'topic', 'value']);
-    counter(event.sequence, '事件序号');
-    identifier(event.topic, '事件主题');
+    counter(event.sequence, t('eventSequence'));
+    identifier(event.topic, t('eventTopic'));
     if (compareCounters(event.sequence, page.start_cursor) < 0
         || compareCounters(event.sequence, page.next_cursor) >= 0
         || (previous !== null && compareCounters(event.sequence, previous) <= 0)) {
-      throw new ProtocolError('事件序号不在页面范围内或顺序无效。');
+      throw new ProtocolError(t('invalidEventOrder'));
     }
     previous = event.sequence;
   }
@@ -202,39 +203,39 @@ export function validatePage(page, { cursor = null, limit = MAX_EVENTS } = {}) {
     if (compareCounters(page.next_cursor, cursor) < 0
         || page.retention_gap !== (compareCounters(cursor, page.start_cursor) < 0)
         || page.events.some(event => compareCounters(event.sequence, cursor) < 0)) {
-      throw new ProtocolError('事件页不属于请求的游标范围。');
+      throw new ProtocolError(t('eventPageCursorMismatch'));
     }
   }
-  if (byteLength(page) > MAX_PAGE_BYTES) throw new ProtocolError('事件页超过字节限制。');
+  if (byteLength(page) > MAX_PAGE_BYTES) throw new ProtocolError(t('eventPageTooLarge'));
   return page;
 }
 
 export function validateResponse(response, request) {
   validateRequest(request);
   fields(response, ['version', 'id', 'generation', 'body'], ['version', 'id', 'body']);
-  if (response.version !== VERSION) throw new ProtocolError('不支持的 zbridge 响应版本。');
-  identifier(response.id, '响应 ID');
-  if (response.id !== request.id) throw new ProtocolError('响应 ID 与原请求不一致。', 'response_mismatch');
-  if (byteLength(response) > MAX_FRAME_BYTES) throw new ProtocolError('响应帧过大。');
-  if (response.generation !== null && response.generation !== undefined) identifier(response.generation, '响应代次');
+  if (response.version !== VERSION) throw new ProtocolError(t('unsupportedBridgeResponse'));
+  identifier(response.id, t('responseId'));
+  if (response.id !== request.id) throw new ProtocolError(t('responseIdMismatch'), 'response_mismatch');
+  if (byteLength(response) > MAX_FRAME_BYTES) throw new ProtocolError(t('frameTooLarge'));
+  if (response.generation !== null && response.generation !== undefined) identifier(response.generation, t('responseGeneration'));
   fields(response.body, ['kind', 'value']);
   const { kind, value } = response.body;
   if (kind === 'error') {
     fields(value, ['code', 'message', 'effect']);
     if (!errorCodes.has(value.code) || !['none', 'may_have_occurred'].includes(value.effect)) {
-      throw new ProtocolError('错误回执字段无效。');
+      throw new ProtocolError(t('invalidErrorReceipt'));
     }
-    text(value.message, 1024, '错误说明');
+    text(value.message, 1024, t('errorMessage'));
     if (request.operation.op !== 'command' && value.effect === 'may_have_occurred') {
-      throw new ProtocolError('只读响应声称产生了命令效果。');
+      throw new ProtocolError(t('invalidReadOnlyEffect'));
     }
     return response;
   }
-  identifier(response.generation, '响应代次');
+  identifier(response.generation, t('responseGeneration'));
   if (request.operation.generation !== undefined && response.generation !== request.operation.generation) {
-    throw new ProtocolError('响应来自另一个后端代次。', 'stale_generation');
+    throw new ProtocolError(t('staleResponseGeneration'), 'stale_generation');
   }
-  if (kind !== request.operation.op) throw new ProtocolError('响应类型与原操作不一致。', 'response_mismatch');
+  if (kind !== request.operation.op) throw new ProtocolError(t('responseTypeMismatch'), 'response_mismatch');
   switch (kind) {
     case 'capabilities':
       validateCapabilities(value);
@@ -242,9 +243,9 @@ export function validateResponse(response, request) {
     case 'state':
       fields(value, ['resource', 'schema_version', 'revision', 'value'], ['resource', 'schema_version', 'value']);
       identifier(value.resource);
-      if (value.resource !== request.operation.resource) throw new ProtocolError('状态来自另一个资源。', 'response_mismatch');
-      integer(value.schema_version, 1, 65535, '状态 schema 版本');
-      if (value.revision !== null && value.revision !== undefined) counter(value.revision, '状态修订号');
+      if (value.resource !== request.operation.resource) throw new ProtocolError(t('responseResourceMismatch'), 'response_mismatch');
+      integer(value.schema_version, 1, 65535, t('stateSchemaVersion'));
+      if (value.revision !== null && value.revision !== undefined) counter(value.revision, t('stateRevision'));
       break;
     case 'events':
       validatePage(value, request.operation);
@@ -252,10 +253,10 @@ export function validateResponse(response, request) {
     case 'command':
       fields(value, ['command', 'value']);
       identifier(value.command);
-      if (value.command !== request.operation.command) throw new ProtocolError('回执来自另一个命令。', 'response_mismatch');
+      if (value.command !== request.operation.command) throw new ProtocolError(t('receiptCommandMismatch'), 'response_mismatch');
       break;
     default:
-      throw new ProtocolError('未声明的响应类型。');
+      throw new ProtocolError(t('unknownResponseType'));
   }
   return response;
 }
@@ -269,11 +270,11 @@ export function unwrapResponse(response, request) {
 export function validateObservation(response, request) {
   fields(response, ['schema', 'request_id', 'generation', 'page']);
   if (response.schema !== 'ssmcp-gui-events-v1' || response.request_id !== request.request_id) {
-    throw new ProtocolError('观察响应与原请求不匹配。', 'response_mismatch');
+    throw new ProtocolError(t('observationResponseMismatch'), 'response_mismatch');
   }
   if (response.generation !== request.generation) {
-    throw new ProtocolError('观察响应来自另一个后端代次。', 'stale_generation');
+    throw new ProtocolError(t('staleObservationResponse'), 'stale_generation');
   }
-  if (byteLength(response) > MAX_FRAME_BYTES) throw new ProtocolError('观察响应帧过大。');
+  if (byteLength(response) > MAX_FRAME_BYTES) throw new ProtocolError(t('observationResponseTooLarge'));
   return validatePage(response.page, request);
 }
